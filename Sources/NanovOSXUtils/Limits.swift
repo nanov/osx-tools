@@ -207,13 +207,21 @@ final class Limits {
 
   // MARK: - Parsing
 
-  private static func date(_ v: Any?) -> Date? {
-    guard let s = v as? String else { return (v as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }
+  /// "2026-11-29T01:59:59.997970+00:00", and the same without the fraction.
+  private static let fractionalDate: ISO8601DateFormatter = {
     let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    if let d = f.date(from: s) { return d }
+    return f
+  }()
+  private static let plainDate: ISO8601DateFormatter = {
+    let f = ISO8601DateFormatter()
     f.formatOptions = [.withInternetDateTime]
-    return f.date(from: s)
+    return f
+  }()
+
+  private static func date(_ v: Any?) -> Date? {
+    guard let s = v as? String else { return (v as? NSNumber).map { Date(timeIntervalSince1970: $0.doubleValue) } }
+    return fractionalDate.date(from: s) ?? plainDate.date(from: s)
   }
 
   private static func severity(_ v: Any?, percent: Double) -> Int {

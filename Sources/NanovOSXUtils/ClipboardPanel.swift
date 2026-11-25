@@ -116,6 +116,9 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     // Hand the pages the views used back to the system rather than keep them for next time.
     DispatchQueue.main.asyncAfter(deadline: .now() + 1) { malloc_zone_pressure_relief(nil, 0) }
     rows = []
+    rowCache = [:]
+    headers = [:]
+    emptyView = nil
     thumbs = [:]
     apps = [:]
     onClose?()
@@ -318,10 +321,13 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     }
   }
 
+  /// Rows by entry id, kept while the window is open so typing reuses them; see `layoutList`.
+  private var rowCache: [UUID: ClipRow] = [:]
+  private var headers: [String: NSTextField] = [:]
+  private var emptyView: NSView?
+
   private func layoutList(grouped: Bool) {
     followWidth()
-    list.subviews.forEach { $0.removeFromSuperview() }
-    rows = []
     // Rows are measured against the list's final width: the window's width is known up front,
     // only its height follows the content.
     layingOut = true
@@ -330,8 +336,12 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     layingOut = false
     let width = max(scroll.contentSize.width, 200)
     listWidth = width
+    emptyView?.removeFromSuperview()
+    emptyView = nil
     effectAppearance {
       if shown.isEmpty {
+        list.subviews.forEach { $0.removeFromSuperview() }
+        rows = []
         let first = clipboard.entries.isEmpty
         let empty = EmptyState(title: first ? "Nothing copied yet" : "No matches",
                                hint: first ? "Copy something to start" : "Try a different search",
@@ -339,35 +349,59 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
         let h: CGFloat = previewOn ? 300 : 180
         empty.frame = NSRect(x: 0, y: 0, width: width, height: h)
         list.addSubview(empty)
+        emptyView = empty
         list.frame = empty.frame
         fit(listHeight: h)
         return
       }
+      // Reuse each entry's row unless the entry or the width changed; place them in order and
+      // take away whatever isn't shown any more.
+      let live = Set(clipboard.entries.map(\.id))
+      rowCache = rowCache.filter { live.contains($0.key) }
+      var placed = Set<ObjectIdentifier>()
+      var next: [ClipRow] = []
       var y: CGFloat = 6
       let pinned = grouped ? shown.filter(\.pinned) : []
       let recent = grouped ? shown.filter { !$0.pinned } : shown
+      // ⌘1…⌘9 follow the history order, which ⌘N pastes by, even where pinned rows lead.
+      var shortcuts: [UUID: Int] = [:]
+      for (i, e) in shown.prefix(9).enumerated() { shortcuts[e.id] = i }
       func section(_ title: String?, _ entries: [Clipboard.Entry]) {
         guard !entries.isEmpty else { return }
         if let title {
-          let h = label(title, size: 11, weight: .semibold, color: .secondaryLabelColor)
+          let h = headers[title] ?? label(title, size: 11, weight: .semibold, color: .secondaryLabelColor)
+          headers[title] = h
           h.frame.origin = NSPoint(x: 20, y: y + 6)
-          list.addSubview(h)
+          if h.superview !== list { list.addSubview(h) }
+          placed.insert(ObjectIdentifier(h))
           y += 26
         }
         for e in entries {
-          let index = shown.prefix(9).firstIndex { $0.id == e.id }
-          let row = ClipRow(entry: e, shortcut: index, thumb: thumb(e), app: app(e.app), width: width - 16,
-                            text: e.kind == .text ? Snippet(e) : nil, panel: self)
+          let shortcut = shortcuts[e.id]
+          let row: ClipRow
+          if let r = rowCache[e.id], r.width == width - 16, r.shows(e) {
+            r.setShortcut(shortcut)
+            row = r
+          } else {
+            row = ClipRow(entry: e, shortcut: shortcut, thumb: thumb(e), app: app(e.app), width: width - 16,
+                          text: e.kind == .text ? Snippet(e) : nil, panel: self)
+            rowCache[e.id]?.removeFromSuperview()
+            rowCache[e.id] = row
+          }
           row.frame.origin = NSPoint(x: 8, y: y)
           row.selected = e.id == selected
-          list.addSubview(row)
-          rows.append(row)
+          if row.superview !== list { list.addSubview(row) }
+          row.syncHover()
+          placed.insert(ObjectIdentifier(row))
+          next.append(row)
           y += row.frame.height + 2
         }
         y += 8 // groups sit further apart than rows
       }
       section(grouped && !pinned.isEmpty ? "Pinned" : nil, pinned)
       section(grouped && !pinned.isEmpty ? "Recent" : nil, recent)
+      for v in list.subviews where !placed.contains(ObjectIdentifier(v)) { v.removeFromSuperview() }
+      rows = next
       y -= 2
       let listHeight = min(max(y, previewOn ? 300 : 0), listCap)
       list.frame = NSRect(x: 0, y: 0, width: width, height: max(y, listHeight))
@@ -434,7 +468,17 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     return found
   }
 
-  func setSampleThumb(_ id: UUID, _ image: NSImage) { thumbs[id] = image }
+  /// For the typing bench: puts `text` in the search as if typed, then draws.
+  func benchType(_ text: String) {
+    search.stringValue = text
+    controlTextDidChange(Notification(name: NSControl.textDidChangeNotification))
+    window.displayIfNeeded()
+  }
+
+  func setSampleThumb(_ id: UUID, _ image: NSImage) {
+    thumbs[id] = image
+    rowCache.removeValue(forKey: id)?.removeFromSuperview() // built before the thumbnail was set
+  }
 
   // MARK: - Selection and actions
 
@@ -542,18 +586,25 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
 
   func setSamplePreview(_ on: Bool) { setPreview(on, remember: false) }
 
+  /// The entry the preview pane shows (nil for "Nothing selected"), so it is rebuilt only
+  /// when that changes.
+  private var previewing: UUID??
+
   private func updatePreview() {
+    let entry = shown.first { $0.id == selected }
+    if previewOn, preview != nil, previewing == .some(entry?.id) { return }
     preview?.removeFromSuperview()
     preview = nil
+    previewing = nil
     guard previewOn, let host = previewHost else { return }
     var pane: PreviewPane!
     effectAppearance {
-      pane = PreviewPane(entry: shown.first { $0.id == selected }, clipboard: clipboard,
-                         thumb: shown.first { $0.id == selected }.flatMap { thumbs[$0.id] })
+      pane = PreviewPane(entry: entry, clipboard: clipboard, thumb: entry.flatMap { thumbs[$0.id] })
     }
     host.addSubview(pane)
     pane.pin(to: host)
     preview = pane
+    previewing = .some(entry?.id)
   }
 
   func controlTextDidChange(_ obj: Notification) {
@@ -619,6 +670,10 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     }
     top = 20000
     screenFrame = NSRect(x: -12000, y: 19000, width: 4000, height: 1600)
+    // Fresh rows, so none carries hover state from where the window was before it moved
+    // offscreen.
+    rowCache.values.forEach { $0.removeFromSuperview() }
+    rowCache = [:]
     reload()
     select(selected, scroll: false)
     window.orderFrontRegardless()
@@ -836,10 +891,13 @@ private func relativeTime(_ d: Date) -> String {
 /// the selected or hovered row.
 private final class ClipRow: NSView {
   let entry: Clipboard.Entry
+  /// The width it was laid out for; a different list width needs a new row.
+  let width: CGFloat
   private weak var panel: ClipboardPanel?
-  private let chip: NSView?
+  private var chip: NSView?
+  private(set) var shortcut: Int?
   private let more = IconButton()
-  private var hovering = false { didSet { update() } }
+  private var hovering = false { didSet { if hovering != oldValue { update() } } }
   var selected = false { didSet { if selected != oldValue { update() } } }
 
   override var isFlipped: Bool { true }
@@ -847,7 +905,9 @@ private final class ClipRow: NSView {
   init(entry e: Clipboard.Entry, shortcut: Int?, thumb: NSImage?, app: (name: String, icon: NSImage)?, width: CGFloat,
        text: Snippet?, panel: ClipboardPanel) {
     entry = e
+    self.width = width
     self.panel = panel
+    self.shortcut = shortcut
     chip = shortcut.map { ClipRow.keycap("⌘\($0 + 1)") }
 
     // Content first, to know the height.
@@ -981,6 +1041,30 @@ private final class ClipRow: NSView {
   }
 
   required init?(coder: NSCoder) { fatalError() }
+
+  /// Moves the ⌘N keycap to a new number (or removes it) when the row's place changes.
+  func setShortcut(_ n: Int?) {
+    guard n != shortcut else { return }
+    shortcut = n
+    chip?.removeFromSuperview()
+    chip = n.map { ClipRow.keycap("⌘\($0 + 1)") }
+    if let chip {
+      chip.frame.origin = NSPoint(x: width - 10 - 28 - 4 - chip.frame.width, y: (bounds.height - chip.frame.height) / 2)
+      addSubview(chip)
+    }
+    update()
+  }
+
+  /// A reused row is drawn as hovered only if the pointer is over it now.
+  func syncHover() {
+    guard let window, window.isVisible, window.frame.contains(NSEvent.mouseLocation) else { hovering = false; return }
+    hovering = visibleRect.contains(convert(window.mouseLocationOutsideOfEventStream, from: nil))
+  }
+
+  /// Whether the row still shows `e` as it is now (a pin or a re-copy changes it).
+  func shows(_ e: Clipboard.Entry) -> Bool {
+    e.pinned == entry.pinned && e.date == entry.date && e.app == entry.app && e.preview == entry.preview
+  }
 
   private static func tile(symbol: String) -> NSView {
     let v = NSView(frame: NSRect(x: 0, y: 0, width: 30, height: 30))

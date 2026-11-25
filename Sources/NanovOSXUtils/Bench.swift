@@ -135,6 +135,36 @@ final class Bench {
     next(0)
   }
 
+  /// Types "the review" a character at a time, five times over, and prints the CPU and wall
+  /// time per keystroke (filter, rows and drawing), then the footprint.
+  static func runTyping() {
+    let startMB = sample().footprintMB
+    let panel = ClipboardPanel(clipboard: Clipboard.sample(count: 50))
+    panel.show()
+    RunLoop.main.run(until: Date().addingTimeInterval(1))
+    let text = "the review"
+    var cpu = 0.0, wall = 0.0, keys = 0
+    for round in 0..<6 {
+      for n in 1...text.count {
+        let t0 = clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID), w0 = Date()
+        panel.benchType(String(text.prefix(n)))
+        let t1 = clock_gettime_nsec_np(CLOCK_PROCESS_CPUTIME_ID)
+        if round > 0 { // the first round warms caches
+          cpu += Double(t1 - t0) / 1_000_000
+          wall += Date().timeIntervalSince(w0) * 1000
+          keys += 1
+        }
+      }
+      panel.benchType("")
+    }
+    print(String(format: "typing\tcpu %.2f ms/key\twall %.2f ms/key\t%.1f MB before, %.1f MB after", cpu / Double(keys),
+                 wall / Double(keys), startMB, sample().footprintMB))
+    fflush(stdout)
+    if CommandLine.arguments.contains("--stay") { print("ready pid \(getpid())"); fflush(stdout); return }
+    panel.close()
+    exit(0)
+  }
+
   func run() {
     let d = UserDefaults.standard
     let saved = (d.object(forKey: "xdrOn"), d.object(forKey: "xdrLevel"))

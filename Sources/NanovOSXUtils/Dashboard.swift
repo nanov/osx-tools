@@ -690,20 +690,20 @@ struct Account {
   var plan: String?
 
   static func read(_ path: String) -> Account {
+    // Data read from a file starts at index 0, so offsets index it directly.
     guard let data = FileManager.default.contents(atPath: path) else { return Account() }
-    let bytes = [UInt8](data)
     guard let start = data.range(of: Data(#""oauthAccount""#.utf8))?.lowerBound else { return Account() }
     // The object is small; look only at the next few KB.
-    let end = min(bytes.count, start + 8192)
+    let end = min(data.count, start + 8192)
     func value(_ key: String) -> String? {
       guard let k = data.range(of: Data("\"\(key)\"".utf8), in: start..<data.count)?.lowerBound, k < end
       else { return nil }
       var i = k + key.utf8.count + 2
-      while i < end, bytes[i] == 0x20 || bytes[i] == 0x3A || bytes[i] == 0x0A || bytes[i] == 0x09 { i += 1 }
-      guard i < end, bytes[i] == 0x22 else { return nil }
+      while i < end, data[i] == 0x20 || data[i] == 0x3A || data[i] == 0x0A || data[i] == 0x09 { i += 1 }
+      guard i < end, data[i] == 0x22 else { return nil }
       var j = i + 1
-      while j < end, bytes[j] != 0x22 { j += bytes[j] == 0x5C ? 2 : 1 }
-      return j < end ? String(decoding: bytes[i + 1..<j], as: UTF8.self) : nil
+      while j < end, data[j] != 0x22 { j += data[j] == 0x5C ? 2 : 1 }
+      return j < end ? String(decoding: data[i + 1..<j], as: UTF8.self) : nil
     }
     var a = Account()
     a.email = value("emailAddress")

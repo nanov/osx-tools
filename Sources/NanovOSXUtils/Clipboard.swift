@@ -400,7 +400,21 @@ final class Clipboard {
     switch count {
     case 0: c.entries = []
     case 2: c.entries = [all[2], all[6]]
-    default: c.entries = Array(all.prefix(count))
+    default:
+      c.entries = Array(all.prefix(count))
+      // Past the twelve, older variations of the same entries.
+      for i in 0..<max(0, count - all.count) {
+        var e = all[i % all.count]
+        e.id = UUID()
+        e.pinned = false
+        e.date -= Double(86400 * (10 + i))
+        if e.kind == .text, let t = e.text {
+          e.text = t + " (\(i))"
+          e.preview = oneLine(e.text!)
+          e.hash = fnv(e.text!)
+        }
+        c.entries.append(e)
+      }
     }
     return c
   }

@@ -70,6 +70,10 @@ let bench = CommandLine.arguments.contains("--bench") ? Bench(delegate) : nil
 let benchPanel = CommandLine.arguments.contains("--bench-panel") ? Bench(delegate) : nil
 if let bench { DispatchQueue.main.async { bench.run() } }
 if let benchPanel { DispatchQueue.main.asyncAfter(deadline: .now() + 3) { benchPanel.runPanel() } }
+// `--bench-typing`: CPU per keystroke while typing into the ⌃V window over 50 made-up entries.
+if CommandLine.arguments.contains("--bench-typing") {
+  DispatchQueue.main.asyncAfter(deadline: .now() + 2) { Bench.runTyping() }
+}
 if CommandLine.arguments.contains("--bench-clipboard") {
   let b = Bench(delegate)
   DispatchQueue.main.async { b.runClipboard() }
