@@ -64,6 +64,8 @@ Modifiers are `cmd`, `ctrl`, `alt` (or `opt`) and `shift`. Keys follow physical 
 
 Everything else (brightness, extra brightness, keep awake, clipboard, Claude Code hooks) is switched on and off from the menu-bar panel. The Claude Code card there installs and removes the hooks; they live in `~/.claude/settings.json`, and the app backs that file up before it touches it.
 
+The Cursor card does the same for `~/.cursor/hooks.json`. For the usage numbers, the app borrows the login Cursor already saved on your Mac: it unlocks it with Cursor's key from the Keychain (macOS asks the first time, when you install the hooks) and asks cursor.com for your current period's usage. The login stays in memory for that one request and only ever goes to cursor.com. Remove the hooks and the app stops asking.
+
 ## License
 
 [WTFPL](LICENSE): do what you want with it.
