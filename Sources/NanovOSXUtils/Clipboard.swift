@@ -1,0 +1,392 @@
+import AppKit
+import ImageIO
+import UniformTypeIdentifiers
+
+/// Clipboard history: text, images and copied files, newest first, with pinned entries kept
+/// apart from the limit. There is no pasteboard notification, so a timer compares
+/// `changeCount` twice a second and reads the pasteboard only when it moved.
+///
+/// Images and long text live on disk, each image with a small thumbnail beside it; memory holds
+/// only the list and short previews. Passwords stay out: content marked concealed, transient or
+/// auto-generated (nspasteboard.org) is skipped, as is anything copied while an app on the
+/// ignore list was in front, and text that reads as a named credential.
+final class Clipboard {
+  struct Entry: Codable, Equatable {
+    enum Kind: String, Codable { case text, image, files }
+    var id = UUID()
+    var kind: Kind
+    /// Text up to `inlineLimit` characters; longer text is in `blob`.
+    var text: String?
+    /// File name under `blobs/`: an image, or long text.
+    var blob: String?
+    var width = 0, height = 0
+    var paths: [String] = []
+    /// One line of whitespace-collapsed text, for rows and search.
+    var preview: String
+    var hash: UInt64
+    var date = Date()
+    var pinned = false
+    var app: String?
+    var length = 0
+  }
+
+  static let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+    .appendingPathComponent("dev.nanov.osx-utils/clipboard")
+  static var blobs: URL { dir.appendingPathComponent("blobs") }
+  static var thumbs: URL { dir.appendingPathComponent("thumbs") }
+  private static var historyURL: URL { dir.appendingPathComponent("history.json") }
+  private static let inlineLimit = 64 * 1024
+
+  /// Pinned first (in their own order), then the rest, newest first.
+  private(set) var entries: [Entry] = []
+  var onChange: (() -> Void)?
+
+  private var timer: Timer?
+  private var lastChange = NSPasteboard.general.changeCount
+  /// Every app that came to the front since the last look: the copy is noticed up to half a
+  /// second late, and a password window often closes the moment something is copied.
+  private var frontSince = Set<String>()
+  private var activation: NSObjectProtocol?
+  private var saveWork: DispatchWorkItem?
+  private let io = DispatchQueue(label: "dev.nanov.osx-utils.clipboard", qos: .utility)
+
+  var isEnabled: Bool {
+    get { UserDefaults.standard.object(forKey: "clipboardEnabled") as? Bool ?? true }
+    set {
+      UserDefaults.standard.set(newValue, forKey: "clipboardEnabled")
+      newValue ? start() : stop()
+    }
+  }
+
+  var limit: Int { max(1, UserDefaults.standard.object(forKey: "clipboardHistoryLimit") as? Int ?? 50) }
+
+  /// Bundle IDs whose copies are never kept. `clipboardIgnoredApps` in the defaults replaces
+  /// this list when set.
+  static let defaultIgnored = [
+    "com.1password.1password", "com.agilebits.onepassword7", "com.bitwarden.desktop",
+    "com.apple.keychainaccess", "com.apple.Passwords", "org.keepassxc.keepassxc",
+    "com.dashlane.dashlanephonefinal", "com.lastpass.LastPass", "in.sinew.Enpass-Desktop",
+  ]
+  private var ignored: Set<String> {
+    Set(UserDefaults.standard.stringArray(forKey: "clipboardIgnoredApps") ?? Self.defaultIgnored)
+  }
+
+  init() {
+    if let data = try? Data(contentsOf: Self.historyURL) {
+      let d = JSONDecoder()
+      d.dateDecodingStrategy = .secondsSince1970
+      entries = (try? d.decode([Entry].self, from: data)) ?? []
+    }
+  }
+
+  // MARK: - Watching
+
+  func start() {
+    guard timer == nil, isEnabled else { return }
+    lastChange = NSPasteboard.general.changeCount
+    let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.check() }
+    t.tolerance = 0.25
+    RunLoop.main.add(t, forMode: .common)
+    timer = t
+    frontSince = Set([NSWorkspace.shared.frontmostApplication?.bundleIdentifier].compactMap { $0 })
+    activation = NSWorkspace.shared.notificationCenter.addObserver(
+      forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+    ) { [weak self] n in
+      if let id = (n.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier {
+        self?.frontSince.insert(id)
+      }
+    }
+  }
+
+  func stop() {
+    timer?.invalidate()
+    timer = nil
+    if let activation { NSWorkspace.shared.notificationCenter.removeObserver(activation) }
+    activation = nil
+  }
+
+  /// Reads the pasteboard if it changed since the last look.
+  func check() {
+    let pb = NSPasteboard.general
+    guard pb.changeCount != lastChange else { return }
+    lastChange = pb.changeCount
+    let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+    let apps = frontSince.union([front].compactMap { $0 })
+    frontSince = Set([front].compactMap { $0 })
+    guard isEnabled, apps.isDisjoint(with: ignored) else { return }
+    let types = Set((pb.types ?? []).map(\.rawValue))
+    if types.contains("org.nspasteboard.ConcealedType") || types.contains("org.nspasteboard.TransientType")
+      || types.contains("org.nspasteboard.AutoGeneratedType") { return }
+    // Our own writes (a paste from the history) are handled where they happen.
+    if types.contains(Self.ownType.rawValue) { return }
+
+    if let urls = pb.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL],
+       !urls.isEmpty {
+      let paths = urls.map(\.path)
+      let names = paths.map { ($0 as NSString).lastPathComponent }
+      add(Entry(kind: .files, paths: paths, preview: names.joined(separator: ", "),
+                hash: Self.fnv(paths.joined(separator: "\n")), app: front))
+      return
+    }
+    let string = pb.string(forType: .string)
+    let rich = types.contains(NSPasteboard.PasteboardType.html.rawValue) || types.contains(NSPasteboard.PasteboardType.rtf.rawValue)
+    let imageType = [NSPasteboard.PasteboardType.png, .tiff].first { types.contains($0.rawValue) }
+    if let imageType, string?.isEmpty ?? true || !rich, let data = pb.data(forType: imageType) {
+      addImage(data, app: front)
+      return
+    }
+    guard let s = string, !s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !Self.looksLikeSecret(s) else {
+      return
+    }
+    var e = Entry(kind: .text, preview: Self.oneLine(s), hash: Self.fnv(s), app: front, length: s.count)
+    if s.utf8.count <= Self.inlineLimit {
+      e.text = s
+    } else {
+      let name = e.id.uuidString + ".txt"
+      e.blob = name
+      Self.ensureDirs()
+      try? Data(s.utf8).write(to: Self.blobs.appendingPathComponent(name))
+    }
+    add(e)
+  }
+
+  /// Images are stored as PNG with a thumbnail, converted off the main thread.
+  private func addImage(_ data: Data, app: String?) {
+    let hash = Self.fnv(data)
+    if let i = entries.firstIndex(where: { $0.hash == hash && $0.kind == .image }) { return bump(i) }
+    var e = Entry(kind: .image, preview: "Image", hash: hash, app: app)
+    let name = e.id.uuidString + ".png"
+    e.blob = name
+    io.async { [weak self] in
+      Self.ensureDirs()
+      guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] else { return }
+      let w = props[kCGImagePropertyPixelWidth] as? Int ?? 0, h = props[kCGImagePropertyPixelHeight] as? Int ?? 0
+      let url = Self.blobs.appendingPathComponent(name)
+      if let d = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) {
+        CGImageDestinationAddImageFromSource(d, src, 0, nil)
+        guard CGImageDestinationFinalize(d) else { return }
+      }
+      Self.writeThumb(from: src, name: e.id.uuidString)
+      DispatchQueue.main.async {
+        guard let self else { return }
+        var e = e
+        e.width = w
+        e.height = h
+        e.preview = "Image · \(w) × \(h)"
+        self.add(e)
+      }
+    }
+  }
+
+  static func writeThumb(from src: CGImageSource, name: String) {
+    let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                 kCGImageSourceThumbnailMaxPixelSize: 160,
+                                 kCGImageSourceCreateThumbnailWithTransform: true]
+    guard let thumb = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary),
+          let d = CGImageDestinationCreateWithURL(thumbs.appendingPathComponent(name + ".png") as CFURL,
+                                                  UTType.png.identifier as CFString, 1, nil) else { return }
+    CGImageDestinationAddImage(d, thumb, nil)
+    CGImageDestinationFinalize(d)
+  }
+
+  private func add(_ e: Entry) {
+    if let i = entries.firstIndex(where: { $0.hash == e.hash && $0.kind == e.kind }) {
+      discardFiles(e) // the copy already kept wins
+      return bump(i)
+    }
+    entries.insert(e, at: entries.firstIndex { !$0.pinned } ?? entries.count)
+    trim()
+    changed()
+  }
+
+  /// Moves an entry to the top of its group, as copied now.
+  private func bump(_ i: Int) {
+    var e = entries.remove(at: i)
+    e.date = Date()
+    entries.insert(e, at: e.pinned ? 0 : entries.firstIndex { !$0.pinned } ?? entries.count)
+    changed()
+  }
+
+  private func trim() {
+    let recent = entries.indices.filter { !entries[$0].pinned }
+    guard recent.count > limit else { return }
+    for i in recent[limit...].reversed() { discardFiles(entries.remove(at: i)) }
+  }
+
+  private func discardFiles(_ e: Entry) {
+    guard let blob = e.blob else { return }
+    try? FileManager.default.removeItem(at: Self.blobs.appendingPathComponent(blob))
+    try? FileManager.default.removeItem(at: Self.thumbs.appendingPathComponent(e.id.uuidString + ".png"))
+  }
+
+  // MARK: - Editing
+
+  func togglePin(_ id: UUID) {
+    guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+    var e = entries.remove(at: i)
+    e.pinned.toggle()
+    entries.insert(e, at: e.pinned ? (entries.lastIndex { $0.pinned }.map { $0 + 1 } ?? 0)
+                                   : entries.firstIndex { !$0.pinned } ?? entries.count)
+    trim()
+    changed()
+  }
+
+  func remove(_ id: UUID) {
+    guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+    discardFiles(entries.remove(at: i))
+    changed()
+  }
+
+  /// Clears everything but the pinned entries.
+  func clearRecent() {
+    entries.filter { !$0.pinned }.forEach(discardFiles)
+    entries.removeAll { !$0.pinned }
+    changed()
+  }
+
+  private func changed() {
+    onChange?()
+    saveWork?.cancel()
+    let snapshot = entries
+    let work = DispatchWorkItem { [io] in
+      io.async {
+        let enc = JSONEncoder()
+        enc.dateEncodingStrategy = .secondsSince1970
+        guard let data = try? enc.encode(snapshot) else { return }
+        Self.ensureDirs()
+        try? data.write(to: Self.historyURL, options: .atomic)
+      }
+    }
+    saveWork = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 1, execute: work)
+  }
+
+  // MARK: - Pasting
+
+  /// Marks pasteboard contents this app wrote, so the watcher doesn't read them back.
+  static let ownType = NSPasteboard.PasteboardType("dev.nanov.osx-utils.clipboard")
+
+  func fullText(_ e: Entry) -> String? {
+    if let t = e.text { return t }
+    guard e.kind == .text, let blob = e.blob else { return nil }
+    return try? String(contentsOf: Self.blobs.appendingPathComponent(blob), encoding: .utf8)
+  }
+
+  /// Puts an entry on the pasteboard (as plain text when `plain`) and moves it to the top.
+  @discardableResult
+  func copy(_ id: UUID, plain: Bool = false) -> Bool {
+    guard let i = entries.firstIndex(where: { $0.id == id }) else { return false }
+    let e = entries[i]
+    let pb = NSPasteboard.general
+    pb.clearContents()
+    var ok = false
+    switch e.kind {
+    case .text:
+      if let t = fullText(e) { ok = pb.setString(t, forType: .string) }
+    case .image:
+      if let blob = e.blob, let data = try? Data(contentsOf: Self.blobs.appendingPathComponent(blob)) {
+        ok = pb.setData(data, forType: .png)
+      }
+    case .files:
+      if plain {
+        ok = pb.setString(e.paths.joined(separator: "\n"), forType: .string)
+      } else {
+        ok = pb.writeObjects(e.paths.map { URL(fileURLWithPath: $0) as NSURL })
+      }
+    }
+    pb.setData(Data(), forType: Self.ownType)
+    lastChange = pb.changeCount
+    if ok { bump(i) }
+    return ok
+  }
+
+  /// ⌘V to the frontmost app, as if typed. Needs Accessibility.
+  static func postPaste() {
+    guard let src = CGEventSource(stateID: .hidSystemState),
+          let down = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: true),
+          let up = CGEvent(keyboardEventSource: src, virtualKey: 9, keyDown: false) else { return }
+    down.flags = .maskCommand
+    up.flags = .maskCommand
+    down.post(tap: .cghidEventTap)
+    up.post(tap: .cghidEventTap)
+  }
+
+  /// The global "paste as plain text": strips the current clipboard to its text, pastes it,
+  /// then puts the original content back so later pastes keep their formatting.
+  func pastePlain() {
+    guard AX.trusted else { return NSSound.beep() }
+    let pb = NSPasteboard.general
+    guard let text = pb.string(forType: .string) else { return Self.postPaste() }
+    let saved: [NSPasteboardItem] = (pb.pasteboardItems ?? []).map { item in
+      let copy = NSPasteboardItem()
+      for t in item.types { if let d = item.data(forType: t) { copy.setData(d, forType: t) } }
+      return copy
+    }
+    pb.clearContents()
+    pb.setString(text, forType: .string)
+    pb.setData(Data(), forType: NSPasteboard.PasteboardType("org.nspasteboard.TransientType"))
+    lastChange = pb.changeCount
+    Self.postPaste()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in
+      // Restore only if nothing else took the pasteboard meanwhile.
+      guard pb.changeCount == self?.lastChange else { return }
+      pb.clearContents()
+      pb.writeObjects(saved)
+      self?.lastChange = pb.changeCount
+    }
+  }
+
+  // MARK: - Helpers
+
+  static func ensureDirs() {
+    for d in [blobs, thumbs] { try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+  }
+
+  static func oneLine(_ s: String) -> String {
+    let head = s.prefix(400)
+    return head.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+  }
+
+  static func fnv(_ s: String) -> UInt64 { fnv(Data(s.utf8)) }
+
+  static func fnv(_ d: Data) -> UInt64 {
+    d.withUnsafeBytes { raw in
+      var h: UInt64 = 0xcbf2_9ce4_8422_2325
+      for b in raw { h = (h ^ UInt64(b)) &* 0x100_0000_01b3 }
+      return h
+    }
+  }
+
+  /// A named credential with a value: `password=…`, `"api_key": "…"`, `Authorization: Bearer …`.
+  private static let secret = try? NSRegularExpression(
+    pattern: #"(?i)(?:password|passwd|secret|token|api[_-]?key|private[_-]?key|authorization)[a-z_-]*["']?[ \t]*[:=][ \t]*["']?[^\s"']{6,}"#)
+
+  static func looksLikeSecret(_ s: String) -> Bool {
+    if s.contains("-----BEGIN") && s.contains("PRIVATE KEY") { return true }
+    guard s.utf8.count < 4096, let secret else { return false }
+    return secret.firstMatch(in: s, range: NSRange(s.startIndex..., in: s)) != nil
+  }
+
+  /// For the render: a history that never touches the real one.
+  static func sample() -> Clipboard {
+    let c = Clipboard(empty: ())
+    let now = Date()
+    func text(_ s: String, _ ago: Double, pinned: Bool = false) -> Entry {
+      Entry(kind: .text, text: s, preview: oneLine(s), hash: fnv(s), date: now - ago, pinned: pinned, length: s.count)
+    }
+    c.entries = [
+      text("git log --oneline --graph --decorate -20", 86400 * 2, pinned: true),
+      text("Thanks! I'll have the review done by Friday.", 40),
+      text("func scheduleClose() {\n  closeWork?.cancel()\n  let work = DispatchWorkItem { [weak self] in self?.close() }\n}", 300),
+      Entry(kind: .image, width: 2940, height: 1912, preview: "Image · 2940 × 1912", hash: 1, date: now - 900),
+      Entry(kind: .files, paths: ["/Users/me/Documents/Quarterly report.pdf"], preview: "Quarterly report.pdf",
+            hash: 2, date: now - 1800),
+      text("https://developer.apple.com/documentation/appkit/nspasteboard", 3600),
+      text("Meeting moved to 15:30, same room.", 7200),
+    ]
+    return c
+  }
+
+  private init(empty: ()) {}
+}
