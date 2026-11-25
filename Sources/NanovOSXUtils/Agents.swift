@@ -123,7 +123,9 @@ final class Agents {
 
   private func received(_ data: Data) {
     guard let (rexSession, rexBlock, source, json) = Self.payload(data) else { return }
-    if source == "cursor" { return receivedCursor(json) }
+    // Cursor also runs Claude Code's hooks, sending its own payload; both copies of an event
+    // land on the same Cursor session.
+    if source == "cursor" || json["cursor_version"] != nil { return receivedCursor(json) }
     guard let id = json["session_id"] as? String, let event = json["hook_event_name"] as? String else { return }
     if event == "SessionEnd" {
       if let t = sessions[id]?.transcript, !t.isEmpty { onTranscript?(t) }
@@ -247,14 +249,18 @@ final class Agents {
     return !s.cwd.isEmpty && s.cwd == p.cwd
   }
 
-  /// A hooked session takes over the discovered entry for the same process.
+  /// A new session id from a pane that already has a row takes that row over: a pane runs one
+  /// claude at a time, and /clear, /resume or a restart give it a new id. Without a pane, only
+  /// a discovered entry for the same folder is taken over.
   private func adoptDiscovered(into s: Session) {
-    guard s.source == .claude, let old = sessions.values.first(where: { $0.discovered && matches($0, ClaudeProcess(
-      pid: 0, cwd: s.cwd, rexSession: s.rexSession, rexBlock: s.rexBlock, started: Date())) })
-    else { return }
-    s.pid = old.pid
-    if s.rexLabel == nil { s.rexLabel = old.rexLabel }
-    sessions[old.id] = nil
+    guard s.source == .claude else { return }
+    let me = ClaudeProcess(pid: 0, cwd: s.cwd, rexSession: s.rexSession, rexBlock: s.rexBlock, started: Date())
+    for old in sessions.values where old !== s && old.source == .claude
+      && (s.rexBlock.isEmpty ? old.discovered : true) && matches(old, me) {
+      if s.pid == 0 { s.pid = old.pid }
+      if s.rexLabel == nil { s.rexLabel = old.rexLabel }
+      sessions[old.id] = nil
+    }
   }
 
   private func watchExit(_ pid: pid_t) {
@@ -707,3 +713,4 @@ final class Agents {
     }
   }
 }
+
