@@ -377,7 +377,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let button = p.on(NSButton(title: installed ? "Remove Hooks" : "Install Hooks", target: nil, action: nil)) {
       [weak self] _ in
       do {
-        try installed ? Agents.removeCursorHooks() : Agents.installCursorHooks()
+        if installed {
+          try Agents.removeCursorHooks()
+          CursorUsage.connected = false
+        } else {
+          try Agents.installCursorHooks()
+          self?.connectCursorUsage()
+        }
       } catch {
         self?.problems.append("Cursor hooks: \(error.localizedDescription)")
       }
@@ -386,14 +392,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     button.controlSize = .small
     button.toolTip = installed
       ? "Removes this app's hooks from ~/.cursor/hooks.json."
-      : "Adds hooks to ~/.cursor/hooks.json so Cursor's agent reports its status to the island. Cursor reloads them by itself."
-    return PanelController.card([PanelController.row([
+      : "Adds hooks to ~/.cursor/hooks.json so Cursor's agent reports its status to the island, "
+        + "then asks for the Cursor Safe Storage key so the dashboard can show Cursor's plan usage."
+    var rows: [NSView] = [PanelController.row([
       Self.cursorIcon(color: active > 0 ? .labelColor : .secondaryLabelColor),
       label("Cursor", weight: .medium),
       PanelController.spacer(),
       label(status, size: 11, color: .secondaryLabelColor),
       button,
-    ])])
+    ])]
+    if installed, !CursorUsage.connected || CursorUsage.denied {
+      let connect = p.on(NSButton(title: "Connect Usage", target: nil, action: nil)) { [weak self] _ in
+        self?.connectCursorUsage()
+      }
+      connect.controlSize = .small
+      connect.toolTip = "Asks macOS for the Cursor Safe Storage key, which unlocks Cursor's sign-in so the "
+        + "dashboard can show its plan usage. Choose Always Allow to not be asked again."
+      rows.append(PanelController.row([
+        label("Plan usage isn't connected.", size: 11, color: .secondaryLabelColor), PanelController.spacer(), connect,
+      ]))
+    }
+    return PanelController.card(rows)
+  }
+
+  /// The one place the keychain prompt for Cursor's key may appear: a button the user pressed.
+  private func connectCursorUsage() {
+    dashboard.cursor.connect { [weak self] in self?.panel.refresh() }
   }
 
   private func clipboardCard(_ p: PanelController) -> NSView {

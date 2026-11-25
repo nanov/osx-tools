@@ -12,7 +12,7 @@ A small native macOS menu-bar app that replaced a Hammerspoon config and a handf
 - **Brightness for every screen.** The built-in display, external monitors over DDC, and a software dimmer for monitors that won't take DDC (looking at you, docks).
 - **Extra brightness.** On an XDR display the slider and keys keep going past 100%. There's no separate mode to think about.
 - **Claude Code in the notch.** A small strip next to the notch (or a pill on screens without one) shows when a session is working, needs you, or has just finished. Hover it for a dashboard: plan limits, spend, trends, models, projects, and every open session. Click a session to jump to its pane in Rex.
-- **Cursor too.** Install Cursor's hooks from the panel and its agent sessions show up in the same strip and list, marked with Cursor's logo. Click one to bring Cursor forward.
+- **Cursor too.** Install Cursor's hooks from the panel and its agent sessions show up in the same strip and list, marked with Cursor's logo, and the dashboard shows Cursor's plan usage for the billing period. Click a session to bring Cursor forward.
 - **Clipboard history.** Press ⌃V for the last 50 things you copied: search, pin, paste, or paste as plain text. Anything a password manager marks as secret is skipped, and nothing leaves the Mac.
 
 <p align="center">

@@ -25,6 +25,12 @@ final class Dashboard {
     l.onChange = { [weak self] in if self?.isOpen == true { self?.build() } }
     return l
   }()
+  /// Cursor's plan usage; made on first use (dashboard opening, or the panel's Cursor card).
+  private(set) lazy var cursor: CursorUsage = {
+    let c = CursorUsage()
+    c.onChange = { [weak self] in if self?.isOpen == true { self?.build() } }
+    return c
+  }()
   private var clock: Timer?
   private var tickers: [() -> Void] = []
   private var monitors: [Any] = []
@@ -82,6 +88,7 @@ final class Dashboard {
     usage.summary(period) { [weak self] s in self?.summaryArrived(s) }
     readAccount()
     limits.refreshIfStale()
+    cursor.refreshIfStale()
   }
 
   /// The opening in reverse: the content fades, the silhouette shrinks back into the notch.
@@ -94,6 +101,7 @@ final class Dashboard {
     monitors = []
     tickers = []
     limits.cancel()
+    cursor.cancel()
     window = nil
     self.root = nil
     scroll = nil
@@ -203,6 +211,12 @@ final class Dashboard {
     let rowHeight = accountCard.frame.height
     place(summary.map { spendingCard($0, height: rowHeight) } ?? progressCard(height: rowHeight), x: m + Self.half + Self.gap)
     y += accountCard.frame.height + Self.gap
+
+    if cursor.available {
+      let card = cursorCard()
+      place(card)
+      y += card.frame.height + Self.gap
+    }
 
     let now = nowCard()
     place(now)
@@ -390,6 +404,83 @@ final class Dashboard {
     }
     c.frame.size.height = y + 16
 
+    let update = { updates.forEach { $0() } }
+    update()
+    tickers.append(update)
+    return c
+  }
+
+  // MARK: Cursor
+
+  /// Cursor's plan, laid out like the Claude card's weekly row: included usage this billing
+  /// period with its reset, spend underneath.
+  private func cursorCard() -> Card {
+    let c = Card(width: Self.full, height: 86)
+    let w = c.bounds.width
+    let reading = cursor.reading
+    let icon: NSView = Agents.cursorIcon.map { TemplateMark($0, size: 12, color: Style.white) }
+      ?? Style.symbol("cube", size: 11, color: Style.white)
+    var right = w - 14
+    if let plan = reading?.plan {
+      let badge = Style.badge(plan, color: Style.grey4)
+      badge.frame.origin = NSPoint(x: right - badge.frame.width, y: 19 - badge.frame.height / 2)
+      c.addSubview(badge)
+      right = badge.frame.minX - 8
+    }
+    c.header(icon: icon, title: "Cursor", titleWidth: right - 32)
+
+    let y: CGFloat = 41
+    let name = label("Included usage", size: 11.5, weight: .semibold, color: Style.white)
+    name.frame.origin = NSPoint(x: 14, y: y - name.frame.height / 2)
+    c.addSubview(name)
+    if let p = reading?.percent {
+      let v = label("\(Int(p.rounded()))%", size: 12.5, weight: .semibold, color: Style.white, digits: true)
+      v.frame.origin = NSPoint(x: w - 14 - v.frame.width, y: y - v.frame.height / 2)
+      c.addSubview(v)
+    }
+    let bar = Shapes(frame: NSRect(x: 14, y: y + 9, width: w - 28, height: 6))
+    bar.rect(bar.bounds, color: Style.track, radius: 3)
+    if let p = reading?.percent, p > 0 {
+      let tint = p >= 100 ? Style.red : p >= 80 ? Style.orange : Style.grey5
+      bar.rect(NSRect(x: 0, y: 0, width: max(6, bar.bounds.width * min(1, p / 100)), height: 6), color: tint, radius: 3)
+    }
+    c.addSubview(bar)
+
+    var updates: [() -> Void] = []
+    if let resets = reading?.resets {
+      let icon = Style.symbol("arrow.clockwise", size: 8.5, color: Style.grey)
+      icon.frame.origin = NSPoint(x: name.frame.maxX + 8, y: y - icon.frame.height / 2)
+      c.addSubview(icon)
+      let r = label("", size: 11, weight: .medium, color: Style.grey)
+      c.addSubview(r)
+      updates.append {
+        r.stringValue = resets > Date() ? Format.remaining(resets.timeIntervalSinceNow) : ""
+        r.sizeToFit()
+        r.frame.origin = NSPoint(x: icon.frame.maxX + 4, y: y - r.frame.height / 2)
+      }
+    }
+
+    let note = label("", size: 10, weight: .medium, color: Style.dim)
+    note.frame = NSRect(x: 14, y: bar.frame.maxY + 5, width: w - 28, height: 14)
+    c.addSubview(note)
+    let cursor = self.cursor
+    updates.append {
+      var parts: [String] = []
+      if let r = reading, let spent = r.spentCents {
+        var s = Format.money(spent / 100) + " spent this period"
+        if let od = r.onDemandCents, od > 0 { s += " · " + Format.money(od / 100) + " on-demand" }
+        parts.append(s)
+      }
+      if cursor.failed {
+        parts.append(CursorUsage.denied ? "Cursor usage unavailable — Connect usage in the panel" : "Cursor usage unavailable")
+      } else if let r = reading, cursor.loading || Date().timeIntervalSince(r.at) > 120 {
+        parts.append("updated " + Format.ago(r.at))
+      } else if reading == nil {
+        parts.append(cursor.loading ? "Checking Cursor usage…" : "Cursor usage unavailable")
+      }
+      note.stringValue = parts.joined(separator: " · ")
+    }
+    c.frame.size.height = note.frame.maxY + 12
     let update = { updates.forEach { $0() } }
     update()
     tickers.append(update)
@@ -646,10 +737,11 @@ final class Dashboard {
     period = p
     usage.refresh()
     limits.refreshIfStale()
+    cursor.refreshIfStale()
     var waited = 0
     func attempt() {
       usage.summary(p) { [self] s in
-        if (usage.progress != nil || limits.loading) && waited < 600 {
+        if (usage.progress != nil || limits.loading || cursor.loading) && waited < 600 {
           waited += 1
           DispatchQueue.main.asyncAfter(deadline: .now() + 0.1, execute: attempt)
           return
@@ -1109,11 +1201,11 @@ private enum Style {
     return v
   }
 
-  static func badge(_ text: String) -> NSView {
-    let l = label(text, size: 10, weight: .semibold, color: accent)
+  static func badge(_ text: String, color: NSColor = accent) -> NSView {
+    let l = label(text, size: 10, weight: .semibold, color: color)
     let v = FlippedView(frame: NSRect(x: 0, y: 0, width: l.frame.width + 14, height: 17))
     v.wantsLayer = true
-    v.layer?.backgroundColor = accent.withAlphaComponent(0.16).cgColor
+    v.layer?.backgroundColor = color.withAlphaComponent(0.16).cgColor
     v.layer?.cornerRadius = 8.5
     l.frame.origin = NSPoint(x: 7, y: (17 - l.frame.height) / 2)
     v.addSubview(l)
