@@ -1018,7 +1018,7 @@ enum Silhouette {
 /// The cards' scroll view: an overlay scroller, and the cards fading out over 14 points at
 /// an edge with more beyond it, so none is cut by a hard line.
 private final class FadingScrollView: NSScrollView {
-  private let fade = CAGradientLayer()
+  private let topFade = EdgeFade(top: true), bottomFade = EdgeFade(top: false)
 
   override init(frame: NSRect) {
     super.init(frame: frame)
@@ -1042,7 +1042,8 @@ private final class FadingScrollView: NSScrollView {
                                            object: self)
     NotificationCenter.default.addObserver(self, selector: #selector(liveEnd), name: NSScrollView.didEndLiveScrollNotification,
                                            object: self)
-    layer?.mask = fade
+    addSubview(topFade)
+    addSubview(bottomFade)
   }
 
   required init?(coder: NSCoder) { fatalError() }
@@ -1050,6 +1051,11 @@ private final class FadingScrollView: NSScrollView {
   deinit { NotificationCenter.default.removeObserver(self) }
 
   @objc private func scrolled() { updateFade() }
+
+  // AppKit flips the layer's geometry once the view is in a window, which turns the gradient
+  // upside down; redraw it then.
+  override func layout() { super.layout(); updateFade() }
+  override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); updateFade() }
 
   /// A swipe (with its momentum and bounce) is in progress.
   private(set) var isLive = false
@@ -1065,23 +1071,30 @@ private final class FadingScrollView: NSScrollView {
     onLiveScrollEnd?()
   }
 
+  /// Black edges over the cards hint there's more above or below.
   func updateFade() {
-    let h = max(bounds.height, 1)
+    let h = bounds.height, edge: CGFloat = 14
     let offset = contentView.bounds.origin.y
     let total = documentView?.frame.height ?? 0
-    let edge = 14 / h
-    let top = offset > 1, bottom = offset + h < total - 1
-    CATransaction.begin()
-    CATransaction.setDisableActions(true)
-    fade.frame = layer?.bounds ?? bounds
-    // Gradient points run bottom to top unless the layer is flipped.
-    let flipped = layer?.isGeometryFlipped ?? false
-    fade.startPoint = CGPoint(x: 0.5, y: flipped ? 0 : 1)
-    fade.endPoint = CGPoint(x: 0.5, y: flipped ? 1 : 0)
-    let clear = CGColor(gray: 0, alpha: 0), solid = CGColor(gray: 0, alpha: 1)
-    fade.colors = [top ? clear : solid, solid, solid, bottom ? clear : solid]
-    fade.locations = [0, NSNumber(value: Double(edge)), NSNumber(value: Double(1 - edge)), 1]
-    CATransaction.commit()
+    topFade.frame = NSRect(x: 0, y: isFlipped ? 0 : h - edge, width: bounds.width, height: edge)
+    bottomFade.frame = NSRect(x: 0, y: isFlipped ? h - edge : 0, width: bounds.width, height: edge)
+    topFade.isHidden = offset <= 1
+    bottomFade.isHidden = offset + h >= total - 1
+  }
+
+}
+
+/// Draws its gradient in view coordinates, so it can't come out upside down the way a layer
+/// mask does when AppKit flips the layer's geometry after the first draw.
+private final class EdgeFade: NSView {
+  private let top: Bool
+  init(top: Bool) { self.top = top; super.init(frame: .zero) }
+  required init?(coder: NSCoder) { fatalError() }
+  override func hitTest(_ point: NSPoint) -> NSView? { nil }
+  override func draw(_ dirtyRect: NSRect) {
+    // Angle 90 runs from minY to maxY; the edge of the scroll view is opaque.
+    let edgeAtMaxY = top != isFlipped
+    NSGradient(starting: edgeAtMaxY ? .clear : .black, ending: edgeAtMaxY ? .black : .clear)?.draw(in: bounds, angle: 90)
   }
 }
 

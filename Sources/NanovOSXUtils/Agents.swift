@@ -515,20 +515,19 @@ final class Agents {
   /// The Rex session's label ("fix-login-redirect") reads better than a folder name.
   private func resolveLabel(_ s: Session) {
     let id = s.rexSession
-    Self.rex(["ls", "--json"]) { data in
+    Self.rex(["ls", "--json"]) { [weak self] data in
       guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let list = root["sessions"] as? [[String: Any]],
             let label = list.first(where: { $0["session_id"] as? String == id })?["label"] as? String,
             !label.isEmpty
       else { return }
-      DispatchQueue.main.async { [weak self] in
+      DispatchQueue.main.async {
         s.rexLabel = label
         self?.onChange?()
       }
     }
   }
 
-  /// Bring the session's terminal pane to the front.
   /// Why the last jump couldn't switch Rex sessions, shown in the panel; nil when it worked.
   private(set) var jumpProblem: String?
 
@@ -540,7 +539,7 @@ final class Agents {
     guard !s.rexSession.isEmpty else { return }
     let session = s.rexSession, block = s.rexBlock
     if s.state == .attention { markUnread(s, false) }
-    Self.rex(["block", "inspect", "-s", session, block, "--json"]) { data in
+    Self.rex(["block", "inspect", "-s", session, block, "--json"]) { [weak self] data in
       let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
       let window = (root?["block"] as? [String: Any])?["window_id"] as? String
       // A restarted Rex can leave a disconnected app client behind, which makes the
@@ -554,10 +553,10 @@ final class Agents {
         let problem = text.contains("Remote Control")
           ? "Rex can't switch sessions: turn on Remote Control in Rex → Settings → General."
           : nil
-        DispatchQueue.main.async { [weak self] in
-          guard let self, jumpProblem != problem else { return }
-          jumpProblem = problem
-          onChange?()
+        DispatchQueue.main.async {
+          guard let self, self.jumpProblem != problem else { return }
+          self.jumpProblem = problem
+          self.onChange?()
         }
         Self.rex(["focus", "-s", session, block])
       }
