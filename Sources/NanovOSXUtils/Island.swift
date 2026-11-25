@@ -51,8 +51,7 @@ final class Island {
     }
     var seen = Set<CGDirectDisplayID>()
     for screen in NSScreen.screens {
-      guard let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-      else { continue }
+      guard let id = screen.displayID else { continue }
       seen.insert(id)
       let w = windows[id] ?? IslandWindow(screen: screen, island: self)
       windows[id] = w
@@ -215,12 +214,12 @@ private final class TrackingView: NSView {
   var onExit: (() -> Void)?
   var onClick: (() -> Void)?
 
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                   owner: self))
+  override init(frame: NSRect) {
+    super.init(frame: frame)
+    trackHover()
   }
+
+  required init?(coder: NSCoder) { fatalError() }
 
   override func mouseEntered(with event: NSEvent) { onEnter?() }
   override func mouseExited(with event: NSEvent) { onExit?() }

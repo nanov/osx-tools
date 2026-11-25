@@ -76,10 +76,7 @@ final class Dashboard {
       NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in self?.close() },
       NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] e in if e.keyCode == 53 { self?.close() } },
     ].compactMap { $0 }
-    let t = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tickers.forEach { $0() } }
-    t.tolerance = 0.2
-    RunLoop.main.add(t, forMode: .common)
-    clock = t
+    clock = Timer.every(1, tolerance: 0.2) { [weak self] in self?.tickers.forEach { $0() } }
 
     usage.refresh()
     usage.summary(period) { [weak self] s in self?.summaryArrived(s) }
@@ -184,7 +181,7 @@ final class Dashboard {
       let midY = min(zone.height, topInset) / 2
       let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
       for (text, leading) in [("Nanov OSX Tools", false), (version, true)] {
-        let l = Style.label(text, size: 11, weight: leading ? .medium : .semibold, color: leading ? Style.grey : Style.grey5)
+        let l = label(text, size: 11, weight: leading ? .medium : .semibold, color: leading ? Style.grey : Style.grey5)
         // Both hug the notch: the name ends at its left side, the version starts at its right.
         let x = leading ? right : left - l.frame.width
         l.frame.origin = NSPoint(x: x, y: midY - l.frame.height / 2)
@@ -192,7 +189,7 @@ final class Dashboard {
       }
     }
     if let p = usage.progress ?? (summary == nil ? 0 : nil) {
-      let l = Style.label("Reading history… \(Int(p * 100))%", size: 10.5, weight: .medium, color: Style.grey)
+      let l = label("Reading history… \(Int(p * 100))%", size: 10.5, weight: .medium, color: Style.grey)
       l.frame.origin = NSPoint(x: Self.width - m - 2 - l.frame.width, y: topInset + 4 + (22 - l.frame.height) / 2)
       header.addSubview(l)
     }
@@ -215,10 +212,9 @@ final class Dashboard {
       let trend = trendCard(s)
       place(trend)
       y += trend.frame.height + Self.gap
-      let models = rankCard(symbol: "cpu", title: "Models", rows: s.models, color: Style.accentBar,
-                            empty: "No usage yet")
+      let models = rankCard(symbol: "cpu", title: "Models", rows: s.models, color: Style.accentBar)
       place(models)
-      place(rankCard(symbol: "folder", title: "Projects", rows: s.projects, color: Style.white, empty: "No usage yet"),
+      place(rankCard(symbol: "folder", title: "Projects", rows: s.projects, color: Style.white),
             x: m + Self.half + Self.gap)
       y += models.frame.height + Self.gap
       let activity = activityCard(s)
@@ -256,7 +252,7 @@ final class Dashboard {
     for (p, title) in [(Usage.Period.today, "Today"), (.week, "7 days"), (.month, "30 days")] {
       let selected = p == period
       let b = Pressable()
-      let l = Style.label(title, size: 11, weight: .semibold, color: selected ? Style.white : Style.grey)
+      let l = label(title, size: 11, weight: .semibold, color: selected ? Style.white : Style.grey)
       b.frame = NSRect(x: x, y: 0, width: l.frame.width + 20, height: 22)
       l.frame.origin = NSPoint(x: 10, y: (22 - l.frame.height) / 2)
       b.addSubview(l)
@@ -296,19 +292,19 @@ final class Dashboard {
     var updates: [() -> Void] = []
 
     /// A row: bold or plain name, an optional reset countdown, a value on the right.
-    func row(_ name: String, bold: Bool, resets: (() -> Date?)?, value: String) -> NSTextField {
-      let n = Style.label(name, size: bold ? 11.5 : 11, weight: bold ? .semibold : .medium,
-                          color: bold ? Style.white : Style.grey4)
+    func row(_ name: String, bold: Bool, resets: (() -> Date?)?, value: String) {
+      let n = label(name, size: bold ? 11.5 : 11, weight: bold ? .semibold : .medium,
+                    color: bold ? Style.white : Style.grey4)
       n.frame.origin = NSPoint(x: 14, y: y - n.frame.height / 2)
       c.addSubview(n)
-      let v = Style.label(value, size: bold ? 12.5 : 11, weight: .semibold, color: Style.white, digits: true)
+      let v = label(value, size: bold ? 12.5 : 11, weight: .semibold, color: Style.white, digits: true)
       v.frame.origin = NSPoint(x: w - 14 - v.frame.width, y: y - v.frame.height / 2)
       c.addSubview(v)
       if let resets {
         let icon = Style.symbol("arrow.clockwise", size: 8.5, color: Style.grey)
         icon.frame.origin = NSPoint(x: n.frame.maxX + 8, y: y - icon.frame.height / 2)
         c.addSubview(icon)
-        let r = Style.label("", size: 11, weight: .medium, color: Style.grey)
+        let r = label("", size: 11, weight: .medium, color: Style.grey)
         c.addSubview(r)
         let rowY = y
         updates.append {
@@ -318,7 +314,6 @@ final class Dashboard {
           r.frame.origin = NSPoint(x: icon.frame.maxX + 4, y: rowY - r.frame.height / 2)
         }
       }
-      return v
     }
     func bar(_ fraction: Double, _ color: NSColor, height h: CGFloat, gap: CGFloat) -> Shapes {
       let b = Shapes(frame: NSRect(x: 14, y: y + gap, width: w - 28, height: h))
@@ -334,12 +329,12 @@ final class Dashboard {
 
     let reading = limits.reading
     if let wk = reading?.weekly {
-      _ = row("Weekly", bold: true, resets: { wk.resets }, value: percent(wk.percent))
+      row("Weekly", bold: true, resets: { wk.resets }, value: percent(wk.percent))
       _ = bar(wk.percent / 100, color(wk.severity), height: 6, gap: 9)
       y += 30
     }
     for m in reading?.models ?? [] {
-      _ = row(m.label, bold: false, resets: nil, value: percent(m.percent))
+      row(m.label, bold: false, resets: nil, value: percent(m.percent))
       _ = bar(m.percent / 100, color(m.severity), height: 3, gap: 8)
       y += 22
     }
@@ -348,9 +343,8 @@ final class Dashboard {
     let block = summary?.block
     let fiveHour = reading?.session
     let cost = block.map { Format.money($0.cost) } ?? "–"
-    let value = row("Session", bold: reading == nil, resets: { fiveHour?.resets ?? block?.end },
-                    value: fiveHour.map { percent($0.percent) + " · " + cost } ?? cost)
-    _ = value
+    row("Session", bold: reading == nil, resets: { fiveHour?.resets ?? block?.end },
+        value: fiveHour.map { percent($0.percent) + " · " + cost } ?? cost)
     let sessionBar = Shapes(frame: NSRect(x: 14, y: y + 9, width: w - 28, height: reading == nil ? 8 : 6))
     c.addSubview(sessionBar)
     updates.append {
@@ -373,7 +367,7 @@ final class Dashboard {
     y = sessionBar.frame.maxY + 12
 
     // Footnote: extra usage, how fresh the reading is, or why there is none.
-    let note = Style.label("", size: 10, weight: .medium, color: Style.dim)
+    let note = label("", size: 10, weight: .medium, color: Style.dim)
     note.frame = NSRect(x: 14, y: y - 7, width: w - 28, height: 14)
     c.addSubview(note)
     let limits = self.limits
@@ -409,10 +403,10 @@ final class Dashboard {
     // Laid out for 96 points; a taller row (the account card's limits) spreads it out.
     let dy = (height - 96) / 2
     c.header(icon: Style.symbol("dollarsign.circle", size: 11, color: Style.grey), title: "Spending")
-    let big = Style.label(Format.money(s.totals.cost), size: 22, weight: .semibold, color: Style.white)
+    let big = label(Format.money(s.totals.cost), size: 22, weight: .semibold, color: Style.white)
     big.frame.origin = NSPoint(x: 14, y: 45 + dy - big.frame.height / 2)
     c.addSubview(big)
-    let api = Style.label("API value", size: 11, weight: .medium, color: Style.grey)
+    let api = label("API value", size: 11, weight: .medium, color: Style.grey)
     api.frame.origin = NSPoint(x: big.frame.maxX + 8, y: big.frame.maxY - api.frame.height - 3)
     c.addSubview(api)
 
@@ -430,8 +424,8 @@ final class Dashboard {
     c.addSubview(bar)
 
     let share = s.totals.tokens > 0 ? Double(s.totals.cacheRead) / Double(s.totals.tokens) : 0
-    let line = Style.label(Format.tokens(s.totals.tokens) + " tokens · \(Int((share * 100).rounded()))% from cache",
-                           size: 10.5, weight: .medium, color: Style.grey)
+    let line = label(Format.tokens(s.totals.tokens) + " tokens · \(Int((share * 100).rounded()))% from cache",
+                     size: 10.5, weight: .medium, color: Style.grey)
     line.frame.origin = NSPoint(x: 14, y: 78 + dy - line.frame.height / 2)
     c.addSubview(line)
     return c
@@ -441,7 +435,7 @@ final class Dashboard {
     let c = Card(width: Self.half, height: height)
     c.header(icon: Style.symbol("dollarsign.circle", size: 11, color: Style.grey), title: "Spending")
     let p = usage.progress ?? 0
-    let l = Style.label("Reading history…", size: 11, weight: .medium, color: Style.grey)
+    let l = label("Reading history…", size: 11, weight: .medium, color: Style.grey)
     l.frame.origin = NSPoint(x: 14, y: 40)
     c.addSubview(l)
     let bar = Shapes(frame: NSRect(x: 14, y: 67, width: c.bounds.width - 28, height: 4))
@@ -464,7 +458,7 @@ final class Dashboard {
       c.addSubview(dot)
     }
     guard !sessions.isEmpty else {
-      let l = Style.label("No live sessions", size: 11.5, weight: .medium, color: Style.dim)
+      let l = label("No live sessions", size: 11.5, weight: .medium, color: Style.dim)
       l.frame.origin = NSPoint(x: 14, y: 41 - l.frame.height / 2)
       c.addSubview(l)
       return c
@@ -483,9 +477,9 @@ final class Dashboard {
       if s.state != .done { mark.pulse(fast: s.state == .attention) }
       row.addSubview(mark)
 
-      let time = Style.label("", size: 11.5, weight: .semibold, color: color, digits: true)
+      let time = label("", size: 11.5, weight: .semibold, color: color, digits: true)
       row.addSubview(time)
-      let title = Style.label(s.title, size: 11.5, weight: .semibold, color: s.state == .done ? Style.grey : Style.white)
+      let title = label(s.title, size: 11.5, weight: .semibold, color: s.state == .done ? Style.grey : Style.white)
       row.addSubview(title)
       let tool = s.tool
       let update = {
@@ -516,7 +510,7 @@ final class Dashboard {
     let c = Card(width: Self.full, height: 118)
     c.header(icon: Style.symbol("chart.bar.xaxis", size: 10.5, color: Style.grey), title: "Trend")
     let name = s.period == .today ? "Today" : s.period == .week ? "7 days" : "30 days"
-    let total = Style.label(name + " · " + Format.money(s.totals.cost), size: 10.5, weight: .semibold, color: Style.grey)
+    let total = label(name + " · " + Format.money(s.totals.cost), size: 10.5, weight: .semibold, color: Style.grey)
     total.frame.origin = NSPoint(x: c.bounds.width - 14 - total.frame.width, y: 19 - total.frame.height / 2)
     c.addSubview(total)
 
@@ -539,7 +533,7 @@ final class Dashboard {
 
     let labels = s.trendLabels
     for (i, text) in labels.enumerated() where !text.isEmpty {
-      let l = Style.label(text, size: 9, weight: .semibold, color: Style.dim, digits: true)
+      let l = label(text, size: 9, weight: .semibold, color: Style.dim, digits: true)
       let x: CGFloat
       switch i {
       case 0: x = 14
@@ -554,12 +548,11 @@ final class Dashboard {
 
   // MARK: Models / Projects
 
-  private func rankCard(symbol: String, title: String, rows: [(name: String, cost: Double)], color: NSColor,
-                        empty: String) -> Card {
+  private func rankCard(symbol: String, title: String, rows: [(name: String, cost: Double)], color: NSColor) -> Card {
     let c = Card(width: Self.half, height: 94)
     c.header(icon: Style.symbol(symbol, size: 10.5, color: Style.grey), title: title)
     guard let top = rows.first?.cost, top > 0 else {
-      let l = Style.label(empty, size: 11, weight: .medium, color: Style.dim)
+      let l = label("No usage yet", size: 11, weight: .medium, color: Style.dim)
       l.frame.origin = NSPoint(x: 14, y: 40 - l.frame.height / 2)
       c.addSubview(l)
       return c
@@ -568,7 +561,7 @@ final class Dashboard {
     let barX = c.bounds.width - 14 - costW - barMax
     for (i, r) in rows.enumerated() {
       let mid = 38 + CGFloat(i) * 19
-      let name = Style.label(r.name, size: 11, weight: .semibold, color: Style.white)
+      let name = label(r.name, size: 11, weight: .semibold, color: Style.white)
       name.frame = NSRect(x: 14, y: mid - name.frame.height / 2, width: min(name.frame.width, barX - 22),
                           height: name.frame.height)
       c.addSubview(name)
@@ -576,7 +569,7 @@ final class Dashboard {
       bar.rect(NSRect(x: 0, y: 0, width: max(4, (barMax * CGFloat(r.cost / top)).rounded()), height: 4),
                color: color, radius: 2)
       c.addSubview(bar)
-      let cost = Style.label(Format.money(r.cost), size: 11, weight: .semibold, color: Style.grey)
+      let cost = label(Format.money(r.cost), size: 11, weight: .semibold, color: Style.grey)
       cost.frame.origin = NSPoint(x: c.bounds.width - 14 - cost.frame.width, y: mid - cost.frame.height / 2)
       c.addSubview(cost)
     }
@@ -589,7 +582,7 @@ final class Dashboard {
     let c = Card(width: Self.full, height: 118)
     c.header(icon: Style.symbol("circle.grid.3x3.fill", size: 10, color: Style.grey), title: "Activity")
     if s.streak > 0 {
-      let n = Style.label("\(s.streak)", size: 11, weight: .semibold, color: Style.orange)
+      let n = label("\(s.streak)", size: 11, weight: .semibold, color: Style.orange)
       n.frame.origin = NSPoint(x: c.bounds.width - 14 - n.frame.width, y: 19 - n.frame.height / 2)
       c.addSubview(n)
       let flame = Style.symbol("flame.fill", size: 9.5, color: Style.orange)
@@ -600,7 +593,7 @@ final class Dashboard {
     let cell: CGFloat = 9.5, pitch: CGFloat = 11.5
     let grid = Shapes(frame: NSRect(x: 14, y: 32, width: 13 * pitch, height: 7 * pitch))
     let maxV = s.days.max() ?? 0
-    let levels = [Style.track, Style.grey1, Style.grey2, Style.grey3, Style.grey4, Style.grey5]
+    let levels = [Style.track, Style.grey1, Style.dim, Style.grey, Style.grey4, Style.grey5]
     for (i, v) in s.days.enumerated() {
       let col = CGFloat(i / 7), row = CGFloat(i % 7)
       var level = 0
@@ -618,10 +611,10 @@ final class Dashboard {
     c.addSubview(grid)
 
     let x = grid.frame.maxX + 16
-    let total = Style.label(Format.money(s.gridTotal), size: 20, weight: .semibold, color: Style.white)
+    let total = label(Format.money(s.gridTotal), size: 20, weight: .semibold, color: Style.white)
     total.frame.origin = NSPoint(x: x, y: 42 - total.frame.height / 2)
     c.addSubview(total)
-    let weeks = Style.label("13 weeks", size: 10.5, weight: .medium, color: Style.grey)
+    let weeks = label("13 weeks", size: 10.5, weight: .medium, color: Style.grey)
     weeks.frame.origin = NSPoint(x: x, y: 60 - weeks.frame.height / 2)
     c.addSubview(weeks)
 
@@ -629,10 +622,10 @@ final class Dashboard {
     if let b = s.busiest { busiest = Format.day(b.day) + " · " + Format.money(b.cost) }
     for (i, (k, v)) in [("Active days", "\(s.activeDays)"), ("Busiest day", busiest)].enumerated() {
       let mid = 86 + CGFloat(i) * 15.5
-      let key = Style.label(k, size: 10.5, weight: .medium, color: Style.grey)
+      let key = label(k, size: 10.5, weight: .medium, color: Style.grey)
       key.frame.origin = NSPoint(x: x, y: mid - key.frame.height / 2)
       c.addSubview(key)
-      let value = Style.label(v, size: 10.5, weight: .semibold, color: Style.white)
+      let value = label(v, size: 10.5, weight: .semibold, color: Style.white)
       value.frame.origin = NSPoint(x: c.bounds.width - 14 - value.frame.width, y: mid - value.frame.height / 2)
       c.addSubview(value)
     }
@@ -699,11 +692,12 @@ struct Account {
   static func read(_ path: String) -> Account {
     guard let data = FileManager.default.contents(atPath: path) else { return Account() }
     let bytes = [UInt8](data)
-    guard let start = find(bytes, Array(#""oauthAccount""#.utf8), from: 0) else { return Account() }
+    guard let start = data.range(of: Data(#""oauthAccount""#.utf8))?.lowerBound else { return Account() }
     // The object is small; look only at the next few KB.
     let end = min(bytes.count, start + 8192)
     func value(_ key: String) -> String? {
-      guard let k = find(bytes, Array("\"\(key)\"".utf8), from: start), k < end else { return nil }
+      guard let k = data.range(of: Data("\"\(key)\"".utf8), in: start..<data.count)?.lowerBound, k < end
+      else { return nil }
       var i = k + key.utf8.count + 2
       while i < end, bytes[i] == 0x20 || bytes[i] == 0x3A || bytes[i] == 0x0A || bytes[i] == 0x09 { i += 1 }
       guard i < end, bytes[i] == 0x22 else { return nil }
@@ -724,16 +718,6 @@ struct Account {
       }
     }
     return a
-  }
-
-  private static func find(_ hay: [UInt8], _ needle: [UInt8], from: Int) -> Int? {
-    hay.withUnsafeBytes { h in
-      needle.withUnsafeBytes { n in
-        guard from < h.count, let r = memmem(h.baseAddress! + from, h.count - from, n.baseAddress!, n.count)
-        else { return nil }
-        return h.baseAddress!.distance(to: UnsafeRawPointer(r))
-      }
-    }
   }
 }
 
@@ -769,6 +753,7 @@ private final class RootView: NSView {
 
   override init(frame: NSRect) {
     super.init(frame: frame)
+    trackHover()
     wantsLayer = true
     layer?.backgroundColor = NSColor.black.cgColor
     layer?.mask = mask
@@ -843,13 +828,6 @@ private final class RootView: NSView {
     let tx = (w / 2 - l.anchorPoint.x * w) * (1 - s)
     let ty = (top - l.anchorPoint.y * h) * (1 - s)
     return CATransform3DConcat(CATransform3DMakeScale(s, s, 1), CATransform3DMakeTranslation(tx, ty, 0))
-  }
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                   owner: self))
   }
 
   override func mouseEntered(with event: NSEvent) { onEnter?() }
@@ -993,7 +971,7 @@ private final class Card: FlippedView {
   func header(icon: NSView, title: String, titleWidth: CGFloat? = nil) {
     icon.frame.origin = NSPoint(x: 14 + (12 - icon.frame.width) / 2, y: 19 - icon.frame.height / 2)
     addSubview(icon)
-    let l = Style.label(title, size: 11.5, weight: .semibold, color: Style.white)
+    let l = label(title, size: 11.5, weight: .semibold, color: Style.white)
     l.frame = NSRect(x: 32, y: 19 - l.frame.height / 2, width: min(l.frame.width, titleWidth ?? .greatestFiniteMagnitude),
                      height: l.frame.height)
     addSubview(l)
@@ -1112,23 +1090,11 @@ private enum Style {
   static let orange = rgb(0xF4A759)
   static let red = rgb(0xE5534B)
   static let grey1 = rgb(0x494949)
-  static let grey2 = rgb(0x666666)
-  static let grey3 = rgb(0x8E8E8E)
   static let grey4 = rgb(0xBABABA)
   static let grey5 = rgb(0xEBEBEB)
 
-  static func label(_ s: String, size: CGFloat, weight: NSFont.Weight, color: NSColor, digits: Bool = false) -> NSTextField {
-    let l = NSTextField(labelWithString: s)
-    l.font = digits ? .monospacedDigitSystemFont(ofSize: size, weight: weight) : .systemFont(ofSize: size, weight: weight)
-    l.textColor = color
-    l.lineBreakMode = .byTruncatingTail
-    l.sizeToFit()
-    return l
-  }
-
   static func symbol(_ name: String, size: CGFloat, color: NSColor) -> NSImageView {
-    let config = NSImage.SymbolConfiguration(pointSize: size, weight: .semibold)
-    let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config) ?? NSImage()
+    let image = NSImage.symbol(name, size, .semibold)
     let v = NSImageView(image: image)
     v.imageScaling = .scaleNone
     v.contentTintColor = color
@@ -1227,4 +1193,12 @@ enum Format {
   }()
 
   static func day(_ d: Date) -> String { dayFormat.string(from: d) }
+
+  private static let weekdayFormat: DateFormatter = {
+    let f = DateFormatter()
+    f.setLocalizedDateFormatFromTemplate("EEE")
+    return f
+  }()
+
+  static func weekday(_ d: Date) -> String { weekdayFormat.string(from: d) }
 }

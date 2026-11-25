@@ -184,12 +184,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")!)
       }
       out.append(PanelController.card([
-        PanelController.label("Window shortcuts need Accessibility access.", size: 12, color: .secondaryLabelColor), b,
+        label("Window shortcuts need Accessibility access.", size: 12, color: .secondaryLabelColor), b,
       ]))
     }
     if !problems.isEmpty {
       out.append(PanelController.card(problems.map {
-        let l = PanelController.label("⚠︎ " + $0, size: 11, color: .systemOrange)
+        let l = label("⚠︎ " + $0, size: 11, color: .systemOrange)
         l.lineBreakMode = .byWordWrapping
         l.maximumNumberOfLines = 3
         return l
@@ -211,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.reload()
     }
     return PanelController.row([
-      PanelController.label("Nanov OSX Tools", weight: .semibold), PanelController.spacer(), edit, reload,
+      label("Nanov OSX Tools", weight: .semibold), PanelController.spacer(), edit, reload,
     ])
   }
 
@@ -219,14 +219,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     displayRows.removeAll()
     var rows: [NSView] = []
     for d in brightness.displays {
-      let value = PanelController.label(valueText(d), size: 11, color: .secondaryLabelColor)
+      let value = label(valueText(d), size: 11, color: .secondaryLabelColor)
       value.alignment = .right
       var title: [NSView] = [
         PanelController.icon(d.isBuiltIn ? "laptopcomputer" : "display", color: .secondaryLabelColor),
-        PanelController.label(d.name, size: 12, weight: .medium),
+        label(d.name, size: 12, weight: .medium),
       ]
       if case .software = d.route {
-        let tag = PanelController.label("software", size: 10, color: .tertiaryLabelColor)
+        let tag = label("software", size: 10, color: .tertiaryLabelColor)
         tag.toolTip = "This monitor doesn't answer DDC, so it's dimmed through its gamma table."
         title.append(tag)
       }
@@ -272,7 +272,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     toggle.controlSize = .mini
     let title = PanelController.row([
       PanelController.icon("sun.max.circle.fill", color: xdr.isBoosting ? .systemYellow : .secondaryLabelColor),
-      PanelController.label("Extra Brightness (XDR)", size: 11, color: .secondaryLabelColor),
+      label("Extra Brightness (XDR)", size: 11, color: .secondaryLabelColor),
       PanelController.spacer(), toggle,
     ], spacing: 6)
     title.toolTip = "Lets the slider and brightness keys go past 100% using the display's HDR headroom."
@@ -298,9 +298,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     let title = PanelController.row([
       PanelController.icon("cup.and.heat.waves.fill", color: ka.isActive ? .controlAccentColor : .secondaryLabelColor),
-      PanelController.label("Keep Awake", weight: .medium),
+      label("Keep Awake", weight: .medium),
       PanelController.spacer(),
-      PanelController.label(status, size: 11, color: .secondaryLabelColor),
+      label(status, size: 11, color: .secondaryLabelColor),
       toggle,
     ])
 
@@ -345,16 +345,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       : "Adds hooks to ~/.claude/settings.json so Claude Code reports its status to the island. New sessions pick them up."
     var extra: [NSView] = []
     if let problem = agents.jumpProblem {
-      let l = PanelController.label("⚠︎ " + problem, size: 11, color: .systemOrange)
+      let l = label("⚠︎ " + problem, size: 11, color: .systemOrange)
       l.lineBreakMode = .byWordWrapping
       l.maximumNumberOfLines = 2
       extra.append(l)
     }
     return PanelController.card([PanelController.row([
       Self.claudeIcon(color: active > 0 ? .systemOrange : .secondaryLabelColor),
-      PanelController.label("Claude Code", weight: .medium),
+      label("Claude Code", weight: .medium),
       PanelController.spacer(),
-      PanelController.label(status, size: 11, color: .secondaryLabelColor),
+      label(status, size: 11, color: .secondaryLabelColor),
       button,
     ])] + extra)
   }
@@ -378,9 +378,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     return PanelController.card([
       PanelController.row([
         PanelController.icon("doc.on.clipboard", color: on ? .controlAccentColor : .secondaryLabelColor),
-        PanelController.label("Clipboard", weight: .medium),
+        label("Clipboard", weight: .medium),
         PanelController.spacer(),
-        PanelController.label(on ? "⌃V · \(count) items" : "Off", size: 11, color: .secondaryLabelColor),
+        label(on ? "⌃V · \(count) items" : "Off", size: 11, color: .secondaryLabelColor),
         toggle,
       ]),
       PanelController.row([PanelController.spacer(), clear]),

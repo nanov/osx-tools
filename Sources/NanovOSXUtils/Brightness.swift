@@ -2,21 +2,15 @@ import AppKit
 
 // Built-in and Apple displays: DisplayServices (private, resolved at runtime).
 private let displayServices = dlopen("/System/Library/PrivateFrameworks/DisplayServices.framework/DisplayServices", RTLD_LAZY)
-private let coreDisplayInfo = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY)
 
 private typealias GetFn = @convention(c) (UInt32, UnsafeMutablePointer<Float>) -> Int32
 private typealias SetFn = @convention(c) (UInt32, Float) -> Int32
 private typealias InfoFn = @convention(c) (UInt32) -> Unmanaged<CFDictionary>?
 
-private func sym<T>(_ h: UnsafeMutableRawPointer?, _ name: String, _: T.Type) -> T? {
-  guard let h, let p = dlsym(h, name) else { return nil }
-  return unsafeBitCast(p, to: T.self)
-}
-
 private let dsGet = sym(displayServices, "DisplayServicesGetBrightness", GetFn.self)
 private let dsSet = sym(displayServices, "DisplayServicesSetBrightness", SetFn.self)
 private let dsSmooth = sym(displayServices, "DisplayServicesSetBrightnessSmooth", SetFn.self)
-private let cdInfo = sym(coreDisplayInfo, "CoreDisplay_DisplayCreateInfoDictionary", InfoFn.self)
+private let cdInfo = sym(coreDisplay, "CoreDisplay_DisplayCreateInfoDictionary", InfoFn.self)
 
 final class Brightness {
   /// system: DisplayServices. ddc: monitor hardware. software: gamma-table dimming, used when
@@ -87,7 +81,7 @@ final class Brightness {
   var displayUnderPointer: Display? {
     let p = NSEvent.mouseLocation
     guard let screen = NSScreen.screens.first(where: { NSMouseInRect(p, $0.frame, false) }),
-          let id = (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+          let id = screen.displayID
     else { return nil }
     return display(id)
   }
@@ -110,8 +104,7 @@ final class Brightness {
   func rebuild() {
     let ids = activeIDs()
     let names = Dictionary(NSScreen.screens.compactMap { s -> (CGDirectDisplayID, String)? in
-      guard let id = (s.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-      else { return nil }
+      guard let id = s.displayID else { return nil }
       return (id, s.localizedName)
     }, uniquingKeysWith: { a, _ in a })
 
@@ -191,7 +184,7 @@ final class Brightness {
         DispatchQueue.main.async { self.fallBackToSoftware(d) }
         return
       }
-      publish(d, Double(st.cur) / Double(st.max), max: st.max, step: false)
+      publish(d, Double(st.cur) / Double(st.max), step: false)
     }
   }
 
@@ -285,22 +278,22 @@ final class Brightness {
       return
     }
     let raw = UInt16((target * Double(max)).rounded())
-    guard port.set(.luminance, raw) else {
+    guard port.setLuminance(raw) else {
       DispatchQueue.main.async { self.fallBackToSoftware(d) }
       return
     }
     ddc[d.id] = DDCState(cur: raw, max: max, readAt: Date())
-    publish(d, target, max: max, step: steps != nil)
+    publish(d, target, step: steps != nil)
   }
 
   private func readState(_ id: CGDirectDisplayID, _ port: DDCPort) -> DDCState? {
-    guard let (cur, max) = port.get(.luminance) else { return nil }
+    guard let (cur, max) = port.getLuminance() else { return nil }
     let st = DDCState(cur: cur, max: max, readAt: Date())
     ddc[id] = st
     return st
   }
 
-  private func publish(_ d: Display, _ level: Double, max: UInt16, step: Bool) {
+  private func publish(_ d: Display, _ level: Double, step: Bool) {
     DispatchQueue.main.async { [weak self] in
       d.level = level
       self?.onChange?()

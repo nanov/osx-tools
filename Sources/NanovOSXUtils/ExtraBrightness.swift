@@ -29,7 +29,7 @@ final class ExtraBrightness {
   private var device: MTLDevice?
   private var queue: MTLCommandQueue?
   private var windows: [NSWindow] = []
-  private var multiply: [CAMetalLayer] = []
+  private var multiply: CAMetalLayer?
   private var trigger: CAMetalLayer?
   private var timer: Timer?
   private var current: Double = 1
@@ -52,7 +52,7 @@ final class ExtraBrightness {
   /// The built-in screen, if it has EDR headroom to give.
   static var screen: NSScreen? {
     NSScreen.screens.first {
-      let id = ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+      let id = $0.displayID ?? 0
       return CGDisplayIsBuiltin(id) != 0 && $0.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.05
     }
   }
@@ -99,10 +99,7 @@ final class ExtraBrightness {
         self?.screensAsleep = false
       },
     ]
-    let t = Timer(timeInterval: 0.25, repeats: true) { [weak self] _ in self?.tick() }
-    t.tolerance = 0.05
-    RunLoop.main.add(t, forMode: .common)
-    timer = t
+    timer = Timer.every(0.25, tolerance: 0.05) { [weak self] in self?.tick() }
     tick()
   }
 
@@ -113,7 +110,7 @@ final class ExtraBrightness {
     observers = []
     windows.forEach { $0.orderOut(nil) }
     windows = []
-    multiply = []
+    multiply = nil
     trigger = nil
     queue = nil
     device = nil
@@ -121,16 +118,12 @@ final class ExtraBrightness {
 
   private func buildWindows(on screen: NSScreen) {
     windows.forEach { $0.orderOut(nil) }
-    windows = []
-    multiply = []
     let f = screen.frame
     // One window over the whole screen. (Two halves left a visible seam.)
-    for r in [f] {
-      let layer = makeLayer()
-      layer.compositingFilter = "multiply"
-      multiply.append(layer)
-      windows.append(makeWindow(r, layer))
-    }
+    let m = makeLayer()
+    m.compositingFilter = "multiply"
+    multiply = m
+    windows = [makeWindow(f, m)]
     let t = makeLayer()
     trigger = t
     windows.append(makeWindow(NSRect(x: f.maxX - 1, y: f.minY, width: 1, height: 1), t))
@@ -184,7 +177,7 @@ final class ExtraBrightness {
       cb.makeRenderCommandEncoder(descriptor: pass)?.endEncoding()
       cb.present(drawable)
     }
-    for layer in multiply { fill(layer, current) }
+    if let multiply { fill(multiply, current) }
     if let trigger { fill(trigger, 1.8) }
     cb.commit()
   }

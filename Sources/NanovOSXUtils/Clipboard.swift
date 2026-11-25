@@ -84,10 +84,7 @@ final class Clipboard {
   func start() {
     guard timer == nil, isEnabled else { return }
     lastChange = NSPasteboard.general.changeCount
-    let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.check() }
-    t.tolerance = 0.25
-    RunLoop.main.add(t, forMode: .common)
-    timer = t
+    timer = Timer.every(0.5, tolerance: 0.25) { [weak self] in self?.check() }
     frontSince = Set([NSWorkspace.shared.frontmostApplication?.bundleIdentifier].compactMap { $0 })
     activation = NSWorkspace.shared.notificationCenter.addObserver(
       forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main

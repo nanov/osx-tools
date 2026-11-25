@@ -177,14 +177,14 @@ final class Limits {
     }
     /// Reads lines until the control_response for `id`; returns its inner `response`.
     func response(_ id: String) -> [String: Any]? {
-      let needle = Array(#""request_id":"\#(id)""#.utf8)
+      let needle = Data(#""request_id":"\#(id)""#.utf8)
       while true {
         while let nl = buffer.firstIndex(of: 0x0A) {
-          let line = Array(buffer[..<nl])
+          let line = Data(buffer[..<nl])
           buffer.removeSubrange(...nl)
           // Only lines naming the request are parsed; the rest (system init etc.) are skipped.
-          guard contains(line, needle),
-                let obj = (try? JSONSerialization.jsonObject(with: Data(line))) as? [String: Any],
+          guard line.range(of: needle) != nil,
+                let obj = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any],
                 obj["type"] as? String == "control_response",
                 let resp = obj["response"] as? [String: Any], resp["request_id"] as? String == id
           else { continue }
@@ -203,13 +203,6 @@ final class Limits {
           let usage = response("usage")
     else { return nil }
     return Self.parse(usage)
-  }
-
-  private func contains(_ hay: [UInt8], _ needle: [UInt8]) -> Bool {
-    guard hay.count >= needle.count else { return false }
-    return hay.withUnsafeBytes { h in needle.withUnsafeBytes { n in
-      memmem(h.baseAddress, h.count, n.baseAddress, n.count) != nil
-    } }
   }
 
   // MARK: - Parsing

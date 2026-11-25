@@ -21,7 +21,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
   private let previewButton = IconButton()
   private let scroll = NSScrollView()
   private let list = FlippedClipView()
-  private let footerCount = NSTextField(labelWithString: "")
+  private let footerCount = label("", size: 11, color: .tertiaryLabelColor)
   private var preview: NSView?
   private var previewHost: NSView?
   private var previewWidth: NSLayoutConstraint?
@@ -31,7 +31,9 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
   /// Space toggles the preview only once the arrows have moved the selection, so a space typed
   /// into the search stays a space.
   private var navigated = false
-  private var previewOn = UserDefaults.standard.bool(forKey: "clipboardPreview")
+  private var previewOn = UserDefaults.standard.bool(forKey: "clipboardPreview") {
+    didSet { previewButton.active = previewOn }
+  }
   private var monitors: [Any] = []
   private var activation: NSObjectProtocol?
   private var thumbs: [UUID: NSImage] = [:]
@@ -182,7 +184,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     let outline = OutlineView()
     outline.translatesAutoresizingMaskIntoConstraints = false
 
-    let lens = NSImageView(image: symbol("magnifyingglass", 15, .medium))
+    let lens = NSImageView(image: .symbol("magnifyingglass", 15, .medium))
     lens.contentTintColor = .tertiaryLabelColor
     search.delegate = self
     search.placeholderAttributedString = NSAttributedString(string: "Search clipboard", attributes: [
@@ -202,8 +204,6 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     scroll.documentView = list
 
     let hints = NSTextField(labelWithAttributedString: Self.hints())
-    footerCount.font = .systemFont(ofSize: 11)
-    footerCount.textColor = .tertiaryLabelColor
     let more = IconButton()
     more.configure(symbol: "ellipsis", tip: "More", target: self, action: #selector(moreClicked), size: 12)
 
@@ -218,14 +218,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     let previewWidth = previewHost.widthAnchor.constraint(equalToConstant: previewOn ? Self.previewPane : 0)
     self.previewWidth = previewWidth
     let headerMid = effect.topAnchor
-    if !usesGlass {
-      NSLayoutConstraint.activate([
-        outline.leadingAnchor.constraint(equalTo: effect.leadingAnchor),
-        outline.trailingAnchor.constraint(equalTo: effect.trailingAnchor),
-        outline.topAnchor.constraint(equalTo: effect.topAnchor),
-        outline.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
-      ])
-    }
+    if !usesGlass { outline.pin(to: effect) }
     NSLayoutConstraint.activate([
       lens.leadingAnchor.constraint(equalTo: effect.leadingAnchor, constant: 20),
       lens.centerYAnchor.constraint(equalTo: headerMid, constant: Self.header / 2),
@@ -265,7 +258,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     ])
     hints.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     hints.lineBreakMode = .byTruncatingTail
-    updatePreviewButton()
+    previewButton.active = previewOn
     reload()
   }
 
@@ -293,11 +286,6 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     image.capInsets = NSEdgeInsets(top: r, left: r, bottom: r, right: r)
     image.resizingMode = .stretch
     return image
-  }
-
-  private func symbol(_ name: String, _ size: CGFloat, _ weight: NSFont.Weight) -> NSImage {
-    let config = NSImage.SymbolConfiguration(pointSize: size, weight: weight)
-    return NSImage(systemSymbolName: name, accessibilityDescription: nil)?.withSymbolConfiguration(config) ?? NSImage()
   }
 
   /// Rebuilds the list from the history and the search.
@@ -347,7 +335,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
         let first = clipboard.entries.isEmpty
         let empty = EmptyState(title: first ? "Nothing copied yet" : "No matches",
                                hint: first ? "Copy something to start" : "Try a different search",
-                               symbol: symbol(first ? "doc.on.clipboard" : "magnifyingglass", 26, .light))
+                               symbol: .symbol(first ? "doc.on.clipboard" : "magnifyingglass", 26, .light))
         let h: CGFloat = previewOn ? 300 : 180
         empty.frame = NSRect(x: 0, y: 0, width: width, height: h)
         list.addSubview(empty)
@@ -361,10 +349,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
       func section(_ title: String?, _ entries: [Clipboard.Entry]) {
         guard !entries.isEmpty else { return }
         if let title {
-          let h = NSTextField(labelWithString: title)
-          h.font = .systemFont(ofSize: 11, weight: .semibold)
-          h.textColor = .secondaryLabelColor
-          h.sizeToFit()
+          let h = label(title, size: 11, weight: .semibold, color: .secondaryLabelColor)
           h.frame.origin = NSPoint(x: 20, y: y + 6)
           list.addSubview(h)
           y += 26
@@ -392,9 +377,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
 
   /// Dynamic colours resolve to the window's appearance while views are built.
   private func effectAppearance(_ body: () -> Void) {
-    var done = false
-    window.effectiveAppearance.performAsCurrentDrawingAppearance { body(); done = true }
-    if !done { body() }
+    window.effectiveAppearance.performAsCurrentDrawingAppearance(body)
   }
 
   /// Sets the width for the preview state before the rows are measured.
@@ -518,9 +501,7 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
 
   fileprivate func hovered(_ id: UUID) {
     guard !navigated else { return }
-    selected = id
-    for r in rows { r.selected = r.entry.id == id }
-    updatePreview()
+    select(id, scroll: false)
   }
 
   @objc private func closeClicked() { close() }
@@ -555,16 +536,11 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
     previewOn = on
     if remember { UserDefaults.standard.set(previewOn, forKey: "clipboardPreview") }
     previewWidth?.constant = previewOn ? Self.previewPane : 0
-    updatePreviewButton()
     reload()
     select(selected)
   }
 
   func setSamplePreview(_ on: Bool) { setPreview(on, remember: false) }
-
-  private func updatePreviewButton() {
-    previewButton.active = previewOn
-  }
 
   private func updatePreview() {
     preview?.removeFromSuperview()
@@ -575,14 +551,8 @@ final class ClipboardPanel: NSObject, NSTextFieldDelegate {
       pane = PreviewPane(entry: shown.first { $0.id == selected }, clipboard: clipboard,
                          thumb: shown.first { $0.id == selected }.flatMap { thumbs[$0.id] })
     }
-    pane.translatesAutoresizingMaskIntoConstraints = false
     host.addSubview(pane)
-    NSLayoutConstraint.activate([
-      pane.leadingAnchor.constraint(equalTo: host.leadingAnchor),
-      pane.trailingAnchor.constraint(equalTo: host.trailingAnchor),
-      pane.topAnchor.constraint(equalTo: host.topAnchor),
-      pane.bottomAnchor.constraint(equalTo: host.bottomAnchor),
-    ])
+    pane.pin(to: host)
     preview = pane
   }
 
@@ -751,8 +721,7 @@ private final class IconButton: NSButton {
   private var hovering = false { didSet { layer?.backgroundColor = hovering ? Palette.hover.cgColor : nil } }
 
   func configure(symbol: String, tip: String, target: AnyObject, action: Selector, size: CGFloat = 13) {
-    image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?
-      .withSymbolConfiguration(.init(pointSize: size, weight: .medium))
+    image = .symbol(symbol, size, .medium, description: tip)
     isBordered = false
     imagePosition = .imageOnly
     toolTip = tip
@@ -760,6 +729,7 @@ private final class IconButton: NSButton {
     self.action = action
     wantsLayer = true
     layer?.cornerRadius = 7
+    trackHover()
     translatesAutoresizingMaskIntoConstraints = false
     widthAnchor.constraint(equalToConstant: 28).isActive = true
     heightAnchor.constraint(equalToConstant: 28).isActive = true
@@ -767,12 +737,6 @@ private final class IconButton: NSButton {
   }
 
   private func tint() { contentTintColor = active ? Palette.clay : .tertiaryLabelColor }
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
-  }
 
   override func mouseEntered(with event: NSEvent) { hovering = true }
   override func mouseExited(with event: NSEvent) { hovering = false }
@@ -864,9 +828,7 @@ private func relativeTime(_ d: Date) -> String {
   let cal = Calendar.current
   if cal.isDateInToday(d) { return "\(Int(s / 3600))h" }
   if cal.isDateInYesterday(d) { return "yesterday" }
-  let f = DateFormatter()
-  f.setLocalizedDateFormatFromTemplate(s < 6 * 86400 ? "EEE" : "d MMM")
-  return f.string(from: d)
+  return s < 6 * 86400 ? Format.weekday(d) : Format.day(d)
 }
 
 /// One entry: a leading visual (kind tile, swatch, thumbnail or Finder icon), the content in
@@ -962,22 +924,20 @@ private final class ClipRow: NSView {
     }
     if let app { meta.append(app.name) }
     meta.append(relativeTime(e.date))
-    let metaLabel = NSTextField(labelWithString: meta.joined(separator: " · "))
-    metaLabel.font = .systemFont(ofSize: 11)
-    metaLabel.textColor = .secondaryLabelColor
+    let metaLabel = label(meta.joined(separator: " · "), size: 11, color: .secondaryLabelColor)
     metaLabel.lineBreakMode = .byTruncatingMiddle
 
     let textX: CGFloat = 12 + 36 + 12
     let trailingRoom: CGFloat = 92
     let textWidth = width - textX - trailingRoom
     primary.preferredMaxLayoutWidth = textWidth
-    primary.lineBreakMode = lines == 2 && text?.kind == .code ? .byTruncatingTail : primary.lineBreakMode
     let fit = primary.cell!.cellSize(forBounds: NSRect(x: 0, y: 0, width: textWidth, height: 1000))
     let primaryHeight = min(ceil(fit.height), lines == 2 ? 34 : 18)
     let metaHeight: CGFloat = 14
     let block = primaryHeight + 3 + metaHeight
     let height = max(e.kind == .image ? 56 : 46, block + 18)
     super.init(frame: NSRect(x: 0, y: 0, width: width, height: height))
+    trackHover()
     wantsLayer = true
     layer?.cornerRadius = 10 // 18 outside, 8 inset
     layer?.cornerCurve = .continuous
@@ -1011,8 +971,7 @@ private final class ClipRow: NSView {
       x -= chip.frame.width + 8
     }
     if e.pinned {
-      let pin = NSImageView(image: NSImage(systemSymbolName: "pin.fill", accessibilityDescription: "Pinned")?
-        .withSymbolConfiguration(.init(pointSize: 10, weight: .semibold)) ?? NSImage())
+      let pin = NSImageView(image: .symbol("pin.fill", 10, .semibold, description: "Pinned"))
       pin.contentTintColor = Palette.clay
       pin.frame = NSRect(x: width - 10 - 28 + 8, y: (height - 14) / 2, width: 12, height: 14)
       pin.identifier = NSUserInterfaceItemIdentifier("pin")
@@ -1029,8 +988,7 @@ private final class ClipRow: NSView {
     v.layer?.cornerRadius = 8
     v.layer?.cornerCurve = .continuous
     v.layer?.backgroundColor = Palette.tile.cgColor
-    let iv = NSImageView(image: NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?
-      .withSymbolConfiguration(.init(pointSize: 12, weight: .medium)) ?? NSImage())
+    let iv = NSImageView(image: .symbol(symbol, 12, .medium))
     iv.contentTintColor = .secondaryLabelColor
     iv.frame = v.bounds
     v.addSubview(iv)
@@ -1064,10 +1022,7 @@ private final class ClipRow: NSView {
   }
 
   static func keycap(_ text: String) -> NSView {
-    let l = NSTextField(labelWithString: text)
-    l.font = .systemFont(ofSize: 10.5, weight: .medium)
-    l.textColor = .secondaryLabelColor
-    l.sizeToFit()
+    let l = label(text, size: 10.5, weight: .medium, color: .secondaryLabelColor)
     let v = NSView(frame: NSRect(x: 0, y: 0, width: l.frame.width + 10, height: 18))
     v.wantsLayer = true
     v.layer?.cornerRadius = 5
@@ -1085,13 +1040,6 @@ private final class ClipRow: NSView {
     chip?.isHidden = !active
     more.isHidden = !hovering
     subviews.first { $0.identifier?.rawValue == "pin" }?.isHidden = hovering
-  }
-
-  override func updateTrackingAreas() {
-    super.updateTrackingAreas()
-    trackingAreas.forEach(removeTrackingArea)
-    addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                                   owner: self))
   }
 
   override func mouseEntered(with event: NSEvent) {
@@ -1121,12 +1069,8 @@ private final class EmptyState: NSView {
     super.init(frame: .zero)
     let icon = NSImageView(image: symbol)
     icon.contentTintColor = .tertiaryLabelColor
-    let t = NSTextField(labelWithString: title)
-    t.font = .systemFont(ofSize: 13, weight: .medium)
-    t.textColor = .secondaryLabelColor
-    let h = NSTextField(labelWithString: hint)
-    h.font = .systemFont(ofSize: 11.5)
-    h.textColor = .tertiaryLabelColor
+    let t = label(title, weight: .medium, color: .secondaryLabelColor)
+    let h = label(hint, size: 11.5, color: .tertiaryLabelColor)
     let stack = NSStackView(views: [icon, t, h])
     stack.orientation = .vertical
     stack.spacing = 4
@@ -1154,18 +1098,14 @@ private final class PreviewPane: NSView {
     rule.bottomAnchor.constraint(equalTo: bottomAnchor).isActive = true
     rule.widthAnchor.constraint(equalToConstant: 1).isActive = true
     guard let e = entry else {
-      let l = NSTextField(labelWithString: "Nothing selected")
-      l.font = .systemFont(ofSize: 12)
-      l.textColor = .tertiaryLabelColor
+      let l = label("Nothing selected", size: 12, color: .tertiaryLabelColor)
       l.translatesAutoresizingMaskIntoConstraints = false
       addSubview(l)
       l.centerXAnchor.constraint(equalTo: centerXAnchor).isActive = true
       l.centerYAnchor.constraint(equalTo: centerYAnchor).isActive = true
       return
     }
-    let info = NSTextField(labelWithString: "")
-    info.font = .systemFont(ofSize: 11, weight: .medium)
-    info.textColor = .secondaryLabelColor
+    let info = label("", size: 11, weight: .medium, color: .secondaryLabelColor)
     info.translatesAutoresizingMaskIntoConstraints = false
     addSubview(info)
     let body: NSView

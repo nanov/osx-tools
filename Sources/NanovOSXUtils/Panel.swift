@@ -97,13 +97,8 @@ final class PanelController {
     bg.layer?.cornerRadius = 12
     bg.layer?.masksToBounds = true
     bg.addSubview(stack)
-    NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: bg.leadingAnchor),
-      stack.trailingAnchor.constraint(equalTo: bg.trailingAnchor),
-      stack.topAnchor.constraint(equalTo: bg.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: bg.bottomAnchor),
-      bg.widthAnchor.constraint(equalToConstant: Self.width),
-    ])
+    stack.pin(to: bg)
+    bg.widthAnchor.constraint(equalToConstant: Self.width).isActive = true
     panel.contentView = bg
     bg.layoutSubtreeIfNeeded()
     panel.invalidateShadow()
@@ -118,15 +113,6 @@ final class PanelController {
     control.target = t
     control.action = #selector(ClosureTarget.fire(_:))
     return control
-  }
-
-  static func label(_ s: String, size: CGFloat = 13, weight: NSFont.Weight = .regular,
-                    color: NSColor = .labelColor) -> NSTextField {
-    let l = NSTextField(labelWithString: s)
-    l.font = .systemFont(ofSize: size, weight: weight)
-    l.textColor = color
-    l.lineBreakMode = .byTruncatingTail
-    return l
   }
 
   static func row(_ views: [NSView], spacing: CGFloat = 8) -> NSStackView {
@@ -173,12 +159,7 @@ final class PanelController {
     card.layer?.cornerRadius = 9
     card.layer?.backgroundColor = NSColor.labelColor.withAlphaComponent(0.06).cgColor
     card.addSubview(stack)
-    NSLayoutConstraint.activate([
-      stack.leadingAnchor.constraint(equalTo: card.leadingAnchor),
-      stack.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-      stack.topAnchor.constraint(equalTo: card.topAnchor),
-      stack.bottomAnchor.constraint(equalTo: card.bottomAnchor),
-    ])
+    stack.pin(to: card)
     for v in rows { v.widthAnchor.constraint(equalTo: stack.widthAnchor, constant: -20).isActive = true }
     return card
   }

@@ -5,47 +5,45 @@ import IOKit
 // DDC/CI over the Apple Silicon display coprocessor's I2C channel.
 // The IOAVService calls live in CoreDisplay and are private, so they're resolved at runtime.
 
-private let coreDisplay = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY)
+let coreDisplay = dlopen("/System/Library/Frameworks/CoreDisplay.framework/CoreDisplay", RTLD_LAZY)
 
 private typealias CreateFn = @convention(c) (CFAllocator?, io_service_t) -> Unmanaged<CFTypeRef>?
 private typealias I2CFn = @convention(c) (CFTypeRef, UInt32, UInt32, UnsafeMutableRawPointer, UInt32) -> IOReturn
 
-private func sym<T>(_ name: String, _: T.Type) -> T? {
-  guard let h = coreDisplay, let p = dlsym(h, name) else { return nil }
+/// A function from a framework opened with dlopen, or nil when it isn't there.
+func sym<T>(_ h: UnsafeMutableRawPointer?, _ name: String, _: T.Type) -> T? {
+  guard let h, let p = dlsym(h, name) else { return nil }
   return unsafeBitCast(p, to: T.self)
 }
 
-private let avCreate = sym("IOAVServiceCreateWithService", CreateFn.self)
-private let avWrite = sym("IOAVServiceWriteI2C", I2CFn.self)
-private let avRead = sym("IOAVServiceReadI2C", I2CFn.self)
+private let avCreate = sym(coreDisplay, "IOAVServiceCreateWithService", CreateFn.self)
+private let avWrite = sym(coreDisplay, "IOAVServiceWriteI2C", I2CFn.self)
+private let avRead = sym(coreDisplay, "IOAVServiceReadI2C", I2CFn.self)
 
-enum VCP: UInt8 {
-  case luminance = 0x10
-}
+/// The VCP code for luminance (brightness), the only one used.
+private let luminance: UInt8 = 0x10
 
 /// One external monitor's DDC channel. All I/O blocks, so call it from a serial queue.
 final class DDCPort {
   let service: CFTypeRef
   let edidUUID: String
   let location: String
-  let productName: String?
   let serial: String?
   /// MCDP29xx DP→HDMI converters accept writes at 0x37 and silently drop them; they listen at 0xB7.
   let chip: UInt32
   private var lastCommand: UInt64 = 0
 
-  private init(service: CFTypeRef, edidUUID: String, location: String, productName: String?, serial: String?, chip: UInt32) {
+  private init(service: CFTypeRef, edidUUID: String, location: String, serial: String?, chip: UInt32) {
     self.service = service
     self.edidUUID = edidUUID
     self.location = location
-    self.productName = productName
     self.serial = serial
     self.chip = chip
   }
 
-  func set(_ code: VCP, _ value: UInt16) -> Bool {
+  func setLuminance(_ value: UInt16) -> Bool {
     pace()
-    let packet = Self.packet([0x03, code.rawValue, UInt8(value >> 8), UInt8(value & 0xFF)])
+    let packet = Self.packet([0x03, luminance, UInt8(value >> 8), UInt8(value & 0xFF)])
     for attempt in 0..<4 {
       if attempt > 0 { usleep(20_000) }
       var ok = true
@@ -59,9 +57,9 @@ final class DDCPort {
   }
 
   /// (current, max), or nil if the monitor didn't give a valid reply.
-  func get(_ code: VCP) -> (UInt16, UInt16)? {
+  func getLuminance() -> (UInt16, UInt16)? {
     pace()
-    let packet = Self.packet([0x01, code.rawValue])
+    let packet = Self.packet([0x01, luminance])
     for attempt in 0..<4 {
       if attempt > 0 { usleep(20_000) }
       usleep(10_000)
@@ -70,8 +68,8 @@ final class DDCPort {
       var reply = [UInt8](repeating: 0, count: 11)
       guard let avRead, avRead(service, chip, 0, &reply, 11) == kIOReturnSuccess else { continue }
       let check = reply[0..<10].reduce(UInt8(0x50), ^)
-      // reply[4] == code guards against monitors answering the previous request.
-      guard check == reply[10], reply[2] == 0x02, reply[3] == 0, reply[4] == code.rawValue else { continue }
+      // reply[4] == the code guards against monitors answering the previous request.
+      guard check == reply[10], reply[2] == 0x02, reply[3] == 0, reply[4] == luminance else { continue }
       let max = UInt16(reply[6]) << 8 | UInt16(reply[7])
       let cur = UInt16(reply[8]) << 8 | UInt16(reply[9])
       return (cur, max == 0 ? 100 : max)
@@ -113,7 +111,7 @@ final class DDCPort {
     defer { IOObjectRelease(iter) }
 
     var ports: [DDCPort] = []
-    var pending: (uuid: String, path: String, name: String?, serial: String?)?
+    var pending: (uuid: String, path: String, serial: String?)?
     while case let entry = IOIteratorNext(iter), entry != 0 {
       defer { IOObjectRelease(entry) }
       var nameBuf = [CChar](repeating: 0, count: 128)
@@ -125,7 +123,7 @@ final class DDCPort {
         var pathBuf = [CChar](repeating: 0, count: 512)
         IORegistryEntryGetPath(entry, kIOServicePlane, &pathBuf)
         let attrs = (property(entry, "DisplayAttributes") as? [String: Any])?["ProductAttributes"] as? [String: Any]
-        pending = (uuid, String(cString: pathBuf), attrs?["ProductName"] as? String,
+        pending = (uuid, String(cString: pathBuf),
                    (attrs?["SerialNumber"]).map { "\($0)" })
       } else if name == "DCPAVServiceProxy", let p = pending,
                 property(entry, "Location") as? String == "External",
@@ -134,8 +132,7 @@ final class DDCPort {
                                                    kCFAllocatorDefault,
                                                    IOOptionBits(kIORegistryIterateRecursively | kIORegistryIterateParents))
         let chip: UInt32 = (epic as? String) == "AppleDCPMCDP29XX" ? 0xB7 : 0x37
-        ports.append(DDCPort(service: svc, edidUUID: p.uuid, location: p.path, productName: p.name,
-                             serial: p.serial, chip: chip))
+        ports.append(DDCPort(service: svc, edidUUID: p.uuid, location: p.path, serial: p.serial, chip: chip))
         pending = nil
       }
     }

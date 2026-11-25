@@ -5,7 +5,6 @@ import AppKit
 final class OSD {
   private var panel: NSPanel?
   private var fill: NSView?
-  private var icon: NSImageView?
   private var fillWidth: NSLayoutConstraint?
   private var hideWork: DispatchWorkItem?
   /// Bumped on every show, so a fade that finishes after a newer show doesn't hide it.
@@ -14,17 +13,14 @@ final class OSD {
   private static let size = NSSize(width: 260, height: 44)
   private static let barWidth: CGFloat = 180
 
-  func show(level: Double, on displayID: CGDirectDisplayID, symbol: String = "sun.max.fill") {
-    guard let screen = NSScreen.screens.first(where: {
-      ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == displayID
-    }) else { return }
+  func show(level: Double, on displayID: CGDirectDisplayID) {
+    guard let screen = NSScreen.screens.first(where: { $0.displayID == displayID }) else { return }
     generation += 1
     let p = panel ?? make()
     let vis = screen.visibleFrame
     p.setFrame(NSRect(x: vis.maxX - Self.size.width - 12, y: vis.maxY - Self.size.height - 8,
                       width: Self.size.width, height: Self.size.height), display: false)
     fillWidth?.constant = Self.barWidth * min(max(level, 0), 1)
-    icon?.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
     p.contentView?.layoutSubtreeIfNeeded()
     if !p.isVisible || p.alphaValue < 1 {
       p.orderFrontRegardless()
@@ -45,7 +41,6 @@ final class OSD {
       panel?.orderOut(nil)
       panel = nil
       fill = nil
-      icon = nil
       fillWidth = nil
     }
   }
@@ -104,7 +99,6 @@ final class OSD {
     p.contentView = bg
     panel = p
     self.fill = fill
-    icon = sun
     fillWidth = fw
     return p
   }

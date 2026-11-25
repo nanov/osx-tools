@@ -316,7 +316,6 @@ final class Usage {
 
   // MARK: - Seen messages
 
-  private static let hourBits: UInt64 = 20
   private static let hourMask: UInt64 = (1 << 20) - 1
 
   /// True when a message with this hash was already counted; otherwise remembers it.
@@ -524,10 +523,8 @@ final class Usage {
     if period == .today {
       s.trendLabels = ["00", "12", "23"]
     } else {
-      let f = DateFormatter()
-      f.setLocalizedDateFormatFromTemplate("d MMM")
       let first = Date(timeIntervalSince1970: dayStarts[max(0, firstDayIndexOfPeriod)])
-      s.trendLabels = [f.string(from: first), "", f.string(from: today)]
+      s.trendLabels = [Format.day(first), "", Format.day(today)]
     }
 
     // Activity numbers.
@@ -605,24 +602,23 @@ final class Usage {
     guard let data = try? Data(contentsOf: Self.cacheURL) else { return startOver() }
     var r = ByteReader(data: data)
     guard r.u64() == Self.magic else { return startOver() }
-    var ok = true
-    for _ in 0..<r.count(&ok) { _ = internModel(r.str()) }
-    for _ in 0..<r.count(&ok) { _ = internProject(r.str()) }
-    let n = r.count(&ok)
+    for _ in 0..<r.count() { _ = internModel(r.str()) }
+    for _ in 0..<r.count() { _ = internProject(r.str()) }
+    let n = r.count()
     files.reserveCapacity(n)
     for _ in 0..<n {
       let rel = r.str()
       var f = FileState(size: r.i64(), mtime: r.i64(), offset: r.i64(), recent: [])
-      for _ in 0..<min(8, r.count(&ok)) { f.recent.append(r.u64()) }
+      for _ in 0..<min(8, r.count()) { f.recent.append(r.u64()) }
       files[rel] = f
     }
-    let b = r.count(&ok)
+    let b = r.count()
     buckets.reserveCapacity(b)
     for _ in 0..<b {
       let k = r.u64()
       buckets[k] = Totals(cost: r.f64(), input: r.i64(), output: r.i64(), cacheRead: r.i64(), cacheWrite: r.i64())
     }
-    if r.failed || !ok { // damaged: start over
+    if r.failed { // damaged: start over
       files = [:]; buckets = [:]; models = []; modelIndex = [:]; modelPrice = []; projects = []; projectIndex = [:]
       return startOver()
     }
@@ -933,9 +929,9 @@ private struct ByteReader {
   }
   mutating func i64() -> Int64 { Int64(bitPattern: u64()) }
   mutating func f64() -> Double { Double(bitPattern: u64()) }
-  mutating func count(_ ok: inout Bool) -> Int {
+  mutating func count() -> Int {
     let n = u64()
-    if n > 10_000_000 { ok = false; failed = true; return 0 }
+    if n > 10_000_000 { failed = true; return 0 }
     return Int(n)
   }
   mutating func str() -> String {

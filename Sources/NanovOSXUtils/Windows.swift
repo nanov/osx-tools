@@ -19,7 +19,7 @@ struct Display {
     guard let primaryH = screens.first?.frame.height else { return [] }
     func cg(_ r: NSRect) -> CGRect { CGRect(x: r.minX, y: primaryH - r.maxY, width: r.width, height: r.height) }
     return screens.map {
-      let id = ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+      let id = $0.displayID ?? 0
       return Display(id: id, frame: cg($0.frame), visible: cg($0.visibleFrame))
     }
   }

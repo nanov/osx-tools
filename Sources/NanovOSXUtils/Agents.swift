@@ -185,10 +185,7 @@ final class Agents {
   /// the dashboard opens. Exits are noticed at once through kqueue.
   func scanProcesses() {
     if scanTimer == nil {
-      let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.scanProcesses() }
-      t.tolerance = 10
-      RunLoop.main.add(t, forMode: .common)
-      scanTimer = t
+      scanTimer = Timer.every(30, tolerance: 10) { [weak self] in self?.scanProcesses() }
     }
     var any = false
     for proc in Self.claudeProcesses() {
@@ -398,10 +395,7 @@ final class Agents {
   private func updateStaleTimer() {
     let anyWorking = sessions.values.contains { $0.state == .working }
     if anyWorking, staleTimer == nil {
-      let t = Timer(timeInterval: 30, repeats: true) { [weak self] _ in self?.checkStale() }
-      t.tolerance = 10
-      RunLoop.main.add(t, forMode: .common)
-      staleTimer = t
+      staleTimer = Timer.every(30, tolerance: 10) { [weak self] in self?.checkStale() }
     } else if !anyWorking {
       staleTimer?.invalidate()
       staleTimer = nil
@@ -431,34 +425,34 @@ final class Agents {
     "/opt/homebrew/bin/rex", "/usr/local/bin/rex",
   ].first { FileManager.default.isExecutableFile(atPath: $0) }
 
+  /// Runs rex and returns its output, or nil when it isn't installed or won't start. Blocks.
+  /// With `errors`, stderr is mixed into the output; otherwise it is discarded.
+  private static func runRex(_ args: [String], errors: Bool) -> Data? {
+    guard let path = rexPath else { return nil }
+    let p = Process()
+    p.executableURL = URL(fileURLWithPath: path)
+    p.arguments = args
+    let pipe = Pipe()
+    p.standardOutput = pipe
+    p.standardError = errors ? pipe : FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return nil }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    p.waitUntilExit()
+    return data
+  }
+
   private static func rex(_ args: [String], output: ((Data) -> Void)? = nil) {
-    guard let path = rexPath else { return }
+    guard rexPath != nil else { return }
     DispatchQueue.global(qos: .userInitiated).async {
-      let p = Process()
-      p.executableURL = URL(fileURLWithPath: path)
-      p.arguments = args
-      let pipe = Pipe()
-      p.standardOutput = pipe
-      p.standardError = pipe // errors (e.g. Remote Control off) come back through `output`
-      guard (try? p.run()) != nil else { return }
-      let data = pipe.fileHandleForReading.readDataToEndOfFile()
-      p.waitUntilExit()
+      // Errors (e.g. Remote Control off) come back through `output`.
+      guard let data = runRex(args, errors: true) else { return }
       output?(data)
     }
   }
 
   /// The connected Rex app client most recently connected, or nil if none.
   private static func liveRexApp() -> String? {
-    guard let path = rexPath else { return nil }
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: path)
-    p.arguments = ["client", "ls", "--json"]
-    let pipe = Pipe()
-    p.standardOutput = pipe
-    p.standardError = FileHandle.nullDevice
-    guard (try? p.run()) != nil else { return nil }
-    let data = pipe.fileHandleForReading.readDataToEndOfFile()
-    p.waitUntilExit()
+    guard let data = runRex(["client", "ls", "--json"], errors: false) else { return nil }
     guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
           let clients = root["clients"] as? [[String: Any]] else { return nil }
     return clients

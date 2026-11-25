@@ -9,7 +9,6 @@ private let log = Logger(subsystem: "dev.nanov.osx-utils", category: "keys")
 final class BrightnessKeys {
   private let brightness: Brightness
   private var tap: CFMachPort?
-  private var source: CFRunLoopSource?
   /// Key codes whose key-down we swallowed; their key-up is swallowed too.
   private var swallowed: Set<Int> = []
   /// Called when a brightness key goes through to macOS for the built-in display.
@@ -25,10 +24,9 @@ final class BrightnessKeys {
 
   var isRunning: Bool { tap != nil }
 
-  /// Needs Accessibility. Returns false if the tap couldn't be created.
-  @discardableResult
-  func start() -> Bool {
-    guard tap == nil else { return true }
+  /// Needs Accessibility; logs and leaves `isRunning` false if the tap couldn't be created.
+  func start() {
+    guard tap == nil else { return }
     let mask = CGEventMask(1) << 14 // NX_SYSDEFINED
     guard let tap = CGEvent.tapCreate(
       tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap, eventsOfInterest: mask,
@@ -39,21 +37,11 @@ final class BrightnessKeys {
       userInfo: Unmanaged.passUnretained(self).toOpaque()
     ) else {
       log.notice("brightness key tap failed; accessibility trusted=\(AXIsProcessTrusted())")
-      return false
+      return
     }
     log.notice("brightness key tap started")
     self.tap = tap
-    source = CFMachPortCreateRunLoopSource(nil, tap, 0)
-    CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-    return true
-  }
-
-  func stop() {
-    guard let tap else { return }
-    CGEvent.tapEnable(tap: tap, enable: false)
-    if let source { CFRunLoopRemoveSource(CFRunLoopGetMain(), source, .commonModes) }
-    self.tap = nil
-    source = nil
+    CFRunLoopAddSource(CFRunLoopGetMain(), CFMachPortCreateRunLoopSource(nil, tap, 0), .commonModes)
   }
 
   private func handle(_ type: CGEventType, _ event: CGEvent) -> Unmanaged<CGEvent>? {
