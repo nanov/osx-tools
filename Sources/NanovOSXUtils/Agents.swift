@@ -578,16 +578,31 @@ final class Agents {
     return image
   }()
 
-  /// Brings Cursor to the front on the session's folder.
+  /// Brings Cursor to the front on the window showing the session's folder. Opening the folder
+  /// instead would start a new window: Cursor opens folders from outside in a new window.
   private static func focusCursor(folder: String) {
-    guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) else { return }
-    // Opening the folder with Cursor focuses the window that has it open (or opens one).
-    if !folder.isEmpty, FileManager.default.fileExists(atPath: folder) {
-      NSWorkspace.shared.open([URL(fileURLWithPath: folder)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
-    } else {
-      NSWorkspace.shared.openApplication(at: app, configuration: .init())
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: cursorBundleID).first else {
+      if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) {
+        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration())
+      }
+      return
     }
+    let name = (folder as NSString).lastPathComponent
+    if AX.trusted, !name.isEmpty {
+      let ax = AXUIElementCreateApplication(app.processIdentifier)
+      // Titles read "file — folder" or "folder"; match the folder as a whole word.
+      // Otherwise the Agents window, where agent chats run without a folder window.
+      let windows = AX.windows(ax).map { ($0, AX.value($0, kAXTitleAttribute) as? String ?? "") }
+      if let w = (windows.first { t in
+        t.1 == name || t.1.hasSuffix(" — " + name) || t.1.hasSuffix(" - " + name) || t.1.contains(" — " + name + " ")
+      } ?? windows.first { $0.1 == "Cursor Agents" })?.0 {
+        AXUIElementSetAttributeValue(w, kAXMainAttribute as CFString, kCFBooleanTrue)
+        AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+      }
+    }
+    app.activate()
   }
+
 
 
   // MARK: - Hooks
