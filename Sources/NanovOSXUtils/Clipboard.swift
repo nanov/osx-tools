@@ -369,22 +369,42 @@ final class Clipboard {
   }
 
   /// For the render: a history that never touches the real one.
-  static func sample() -> Clipboard {
+  /// A made-up history for renders: `count` 0 (empty), 2, or anything else for the mixed set.
+  /// Apps are common system bundles so their icons resolve.
+  static func sample(count: Int = 12) -> Clipboard {
     let c = Clipboard(empty: ())
     let now = Date()
-    func text(_ s: String, _ ago: Double, pinned: Bool = false) -> Entry {
-      Entry(kind: .text, text: s, preview: oneLine(s), hash: fnv(s), date: now - ago, pinned: pinned, length: s.count)
+    func text(_ s: String, _ ago: Double, app: String?, pinned: Bool = false) -> Entry {
+      Entry(kind: .text, text: s, preview: oneLine(s), hash: fnv(s), date: now - ago, pinned: pinned, app: app,
+            length: s.count)
     }
-    c.entries = [
-      text("git log --oneline --graph --decorate -20", 86400 * 2, pinned: true),
-      text("Thanks! I'll have the review done by Friday.", 40),
-      text("func scheduleClose() {\n  closeWork?.cancel()\n  let work = DispatchWorkItem { [weak self] in self?.close() }\n}", 300),
-      Entry(kind: .image, width: 2940, height: 1912, preview: "Image · 2940 × 1912", hash: 1, date: now - 900),
-      Entry(kind: .files, paths: ["/Users/me/Documents/Quarterly report.pdf"], preview: "Quarterly report.pdf",
-            hash: 2, date: now - 1800),
-      text("https://developer.apple.com/documentation/appkit/nspasteboard", 3600),
-      text("Meeting moved to 15:30, same room.", 7200),
+    let terminal = "com.apple.Terminal", safari = "com.apple.Safari", notes = "com.apple.Notes",
+        mail = "com.apple.mail", finder = "com.apple.finder", preview = "com.apple.Preview", xcode = "com.apple.dt.Xcode",
+        messages = "com.apple.MobileSMS"
+    let all: [Entry] = [
+      text("git log --oneline --graph --decorate -20", 86400 * 2, app: terminal, pinned: true),
+      text("#D98B6E", 86400 * 3, app: notes, pinned: true),
+      text("Thanks! I'll have the review done by Friday, and I'll send the notes over to the whole team once "
+           + "the numbers from finance come back.", 40, app: mail),
+      text("func scheduleClose() {\n  closeWork?.cancel()\n  let work = DispatchWorkItem { [weak self] in self?.close() }\n}",
+           300, app: xcode),
+      Entry(kind: .image, width: 2940, height: 1912, preview: "Image · 2940 × 1912", hash: 1, date: now - 900,
+            app: preview),
+      Entry(kind: .files, paths: ["/Applications/Safari.app"], preview: "Safari.app", hash: 2, date: now - 1800, app: finder),
+      text("https://developer.apple.com/documentation/appkit/nspasteboard", 3600, app: safari),
+      text("Meeting moved to 15:30, same room.", 7200, app: messages),
+      text("#3B82F6", 86400 + 3600, app: safari),
+      Entry(kind: .files, paths: ["/System/Applications/Notes.app", "/System/Applications/Mail.app",
+                                  "/System/Applications/Calendar.app"],
+            preview: "3 files", hash: 3, date: now - 86400 * 2, app: finder),
+      text("brew upgrade --cask --greedy", 86400 * 4, app: terminal),
+      text("Gate B42 · boarding 18:05", 86400 * 9, app: mail),
     ]
+    switch count {
+    case 0: c.entries = []
+    case 2: c.entries = [all[2], all[6]]
+    default: c.entries = Array(all.prefix(count))
+    }
     return c
   }
 

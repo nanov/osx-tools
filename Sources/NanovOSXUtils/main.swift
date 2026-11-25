@@ -36,23 +36,26 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dashboard"), i + 1 < C
   app.run()
 }
 
-// `NanovOSXUtils --render-clipboard out.png [preview]`: draw the ⌃V window with sample entries
-// (never the real history) into a PNG, then exit.
+// `NanovOSXUtils --render-clipboard out.png [items=N] [preview] [light]`: draw the ⌃V window
+// with made-up entries (never the real history) into a PNG, then exit.
 if let i = CommandLine.arguments.firstIndex(of: "--render-clipboard"), i + 1 < CommandLine.arguments.count {
   let app = NSApplication.shared
   app.setActivationPolicy(.accessory)
   let path = CommandLine.arguments[i + 1]
+  let args = CommandLine.arguments
+  let count = args.first { $0.hasPrefix("items=") }.flatMap { Int($0.dropFirst(6)) } ?? 12
+  let dark = !args.contains("light")
   DispatchQueue.main.async {
-    let c = Clipboard.sample()
-    let p = ClipboardPanel(clipboard: c, appearance: NSAppearance(named: .darkAqua))
+    let c = Clipboard.sample(count: count)
+    let p = ClipboardPanel(clipboard: c, appearance: NSAppearance(named: dark ? .darkAqua : .aqua))
     // A drawn stand-in for the image entry's thumbnail.
     let thumb = NSImage(size: NSSize(width: 120, height: 78), flipped: false) { r in
       NSGradient(starting: .systemIndigo, ending: .systemTeal)?.draw(in: r, angle: 35)
       return true
     }
     if let img = c.entries.first(where: { $0.kind == .image }) { p.setSampleThumb(img.id, thumb) }
-    p.setSamplePreview(CommandLine.arguments.contains("preview"))
-    p.render(to: path)
+    p.setSamplePreview(args.contains("preview"))
+    p.render(to: path, dark: dark)
     exit(0)
   }
   app.run()
