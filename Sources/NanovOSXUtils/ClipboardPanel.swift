@@ -74,6 +74,8 @@ final class ClipboardPanel: NSObject, NSSearchFieldDelegate {
     if let sheet = window.attachedSheet { window.endSheet(sheet) }
     window.makeFirstResponder(nil) // ends the field editor and its caret timer
     window.orderOut(nil)
+    if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
+    resizeObserver = nil
     window.contentView = nil
     window.close()
     // Hand the pages the views used back to the system rather than keep them for next time.
@@ -217,10 +219,33 @@ final class ClipboardPanel: NSObject, NSSearchFieldDelegate {
     updatePreview()
   }
 
+  private var listWidth: CGFloat = 0
+  private var layingOut = false
+  private var resizeObserver: NSObjectProtocol?
+
+  /// Lay the rows out again when the list's width changes (window placed, preview toggled).
+  private func followWidth() {
+    guard resizeObserver == nil else { return }
+    scroll.contentView.postsFrameChangedNotifications = true
+    resizeObserver = NotificationCenter.default.addObserver(
+      forName: NSView.frameDidChangeNotification, object: scroll.contentView, queue: .main
+    ) { [weak self] _ in
+      guard let self, !layingOut, abs(scroll.contentSize.width - listWidth) > 0.5 else { return }
+      reload()
+    }
+  }
+
   private func layoutList(grouped: Bool) {
+    followWidth()
     list.subviews.forEach { $0.removeFromSuperview() }
     rows = []
+    // The scroll view only has its real size once the window has laid out; measuring
+    // before that gave rows a fraction of the width.
+    layingOut = true
+    window.contentView?.layoutSubtreeIfNeeded()
+    layingOut = false
     let width = max(scroll.contentSize.width, 200)
+    listWidth = width
     var y: CGFloat = 6
     if shown.isEmpty {
       let empty = EmptyState(message: clipboard.entries.isEmpty ? "No clipboard history yet" : "No results",
