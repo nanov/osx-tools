@@ -206,17 +206,18 @@ final class Dashboard {
     var y: CGFloat = 0
     func place(_ v: NSView, x: CGFloat = m) { v.frame.origin = NSPoint(x: x, y: y); doc.addSubview(v) }
 
-    let accountCard = accountCard()
-    place(accountCard)
-    let rowHeight = accountCard.frame.height
-    place(summary.map { spendingCard($0, height: rowHeight) } ?? progressCard(height: rowHeight), x: m + Self.half + Self.gap)
-    y += accountCard.frame.height + Self.gap
-
-    if cursor.available {
-      let card = cursorCard()
-      place(card)
-      y += card.frame.height + Self.gap
+    // Claude and Cursor side by side, the same height; Claude alone takes the full width.
+    let showCursor = cursor.available && !CommandLine.arguments.contains("--no-cursor")
+    let claude = accountCard(width: showCursor ? Self.half : Self.full)
+    if showCursor {
+      let other = cursorCard(width: Self.half)
+      let h = max(claude.frame.height, other.frame.height)
+      claude.frame.size.height = h
+      other.frame.size.height = h
+      place(other, x: m + Self.half + Self.gap)
     }
+    place(claude)
+    y += claude.frame.height + Self.gap
 
     let now = nowCard()
     place(now)
@@ -283,8 +284,9 @@ final class Dashboard {
 
   // MARK: Account
 
-  private func accountCard() -> Card {
-    let c = Card(width: Self.half, height: 96)
+  /// Claude: plan limits on top, then what the selected period would cost at API prices.
+  private func accountCard(width: CGFloat) -> Card {
+    let c = Card(width: width, height: 96)
     let mark = ClaudeMark(size: 14, color: Style.accent)
     var title = "Claude"
     if let e = account.email { title += " · " + e }
@@ -402,7 +404,56 @@ final class Dashboard {
       }
       note.stringValue = parts.joined(separator: " · ")
     }
-    c.frame.size.height = y + 16
+    y += 16
+
+    // Spending, below a hairline.
+    let rule = Shapes(frame: NSRect(x: 14, y: y, width: w - 28, height: 1))
+    rule.rect(rule.bounds, color: Style.track, radius: 0)
+    c.addSubview(rule)
+    y += 12
+    if let s = summary {
+      let big = label(Format.money(s.totals.cost), size: 22, weight: .semibold, color: Style.white)
+      big.frame.origin = NSPoint(x: 14, y: y)
+      c.addSubview(big)
+      let api = label("API value", size: 11, weight: .medium, color: Style.grey)
+      api.frame.origin = NSPoint(x: big.frame.maxX + 8, y: big.frame.maxY - api.frame.height - 3)
+      c.addSubview(api)
+      y = big.frame.maxY + 6
+
+      // One bar, split by model.
+      let bar = Shapes(frame: NSRect(x: 14, y: y, width: w - 28, height: 3.5))
+      if s.modelShares.isEmpty { bar.rect(bar.bounds, color: Style.track, radius: 2) }
+      var x: CGFloat = 0
+      for (i, share) in s.modelShares.prefix(4).enumerated() {
+        let bw = i == min(3, s.modelShares.count - 1) ? bar.bounds.width - x : (bar.bounds.width * share).rounded()
+        guard bw >= 1 else { continue }
+        let alpha: CGFloat = [1, 0.6, 0.38, 0.22][i]
+        bar.rect(NSRect(x: x, y: 0, width: max(1, bw - 2), height: 3.5), color: Style.accentBar.withAlphaComponent(alpha),
+                 radius: 1.75)
+        x += bw
+      }
+      c.addSubview(bar)
+      y = bar.frame.maxY + 8
+
+      let share = s.totals.tokens > 0 ? Double(s.totals.cacheRead) / Double(s.totals.tokens) : 0
+      let line = label(Format.tokens(s.totals.tokens) + " tokens · \(Int((share * 100).rounded()))% from cache",
+                       size: 10.5, weight: .medium, color: Style.grey)
+      line.frame.origin = NSPoint(x: 14, y: y)
+      line.frame.size.width = min(line.frame.width, w - 28)
+      c.addSubview(line)
+      y = line.frame.maxY
+    } else {
+      let l = label("Reading history…", size: 11, weight: .medium, color: Style.grey)
+      l.frame.origin = NSPoint(x: 14, y: y)
+      c.addSubview(l)
+      let bar = Shapes(frame: NSRect(x: 14, y: l.frame.maxY + 8, width: w - 28, height: 4))
+      bar.rect(bar.bounds, color: Style.track, radius: 2)
+      bar.rect(NSRect(x: 0, y: 0, width: max(4, bar.bounds.width * (usage.progress ?? 0)), height: 4),
+               color: Style.accentBar, radius: 2)
+      c.addSubview(bar)
+      y = bar.frame.maxY
+    }
+    c.frame.size.height = y + 14
 
     let update = { updates.forEach { $0() } }
     update()
@@ -414,8 +465,8 @@ final class Dashboard {
 
   /// Cursor's plan, laid out like the Claude card's weekly row: included usage this billing
   /// period with its reset, spend underneath.
-  private func cursorCard() -> Card {
-    let c = Card(width: Self.full, height: 86)
+  private func cursorCard(width: CGFloat) -> Card {
+    let c = Card(width: width, height: 86)
     let w = c.bounds.width
     let reading = cursor.reading
     let icon: NSView = Agents.cursorIcon.map { TemplateMark($0, size: 12, color: Style.white) }
@@ -460,8 +511,11 @@ final class Dashboard {
       }
     }
 
+    // Two lines at most: spend, then how fresh the reading is (wraps at half width).
     let note = label("", size: 10, weight: .medium, color: Style.dim)
-    note.frame = NSRect(x: 14, y: bar.frame.maxY + 5, width: w - 28, height: 14)
+    note.lineBreakMode = .byWordWrapping
+    note.maximumNumberOfLines = 2
+    note.frame = NSRect(x: 14, y: bar.frame.maxY + 5, width: w - 28, height: 28)
     c.addSubview(note)
     let cursor = self.cursor
     updates.append {
@@ -480,59 +534,10 @@ final class Dashboard {
       }
       note.stringValue = parts.joined(separator: " · ")
     }
-    c.frame.size.height = note.frame.maxY + 12
+    c.frame.size.height = note.frame.maxY + 6
     let update = { updates.forEach { $0() } }
     update()
     tickers.append(update)
-    return c
-  }
-
-  // MARK: Spending
-
-  private func spendingCard(_ s: Usage.Summary, height: CGFloat) -> Card {
-    let c = Card(width: Self.half, height: height)
-    // Laid out for 96 points; a taller row (the account card's limits) spreads it out.
-    let dy = (height - 96) / 2
-    c.header(icon: Style.symbol("dollarsign.circle", size: 11, color: Style.grey), title: "Spending")
-    let big = label(Format.money(s.totals.cost), size: 22, weight: .semibold, color: Style.white)
-    big.frame.origin = NSPoint(x: 14, y: 45 + dy - big.frame.height / 2)
-    c.addSubview(big)
-    let api = label("API value", size: 11, weight: .medium, color: Style.grey)
-    api.frame.origin = NSPoint(x: big.frame.maxX + 8, y: big.frame.maxY - api.frame.height - 3)
-    c.addSubview(api)
-
-    // One bar, split by model.
-    let bar = Shapes(frame: NSRect(x: 14, y: 63 + dy, width: c.bounds.width - 28, height: 3.5))
-    if s.modelShares.isEmpty { bar.rect(bar.bounds, color: Style.track, radius: 2) }
-    var x: CGFloat = 0
-    for (i, share) in s.modelShares.prefix(4).enumerated() {
-      let w = i == min(3, s.modelShares.count - 1) ? bar.bounds.width - x : (bar.bounds.width * share).rounded()
-      guard w >= 1 else { continue }
-      let alpha: CGFloat = [1, 0.6, 0.38, 0.22][i]
-      bar.rect(NSRect(x: x, y: 0, width: max(1, w - 2), height: 3.5), color: Style.accentBar.withAlphaComponent(alpha), radius: 1.75)
-      x += w
-    }
-    c.addSubview(bar)
-
-    let share = s.totals.tokens > 0 ? Double(s.totals.cacheRead) / Double(s.totals.tokens) : 0
-    let line = label(Format.tokens(s.totals.tokens) + " tokens · \(Int((share * 100).rounded()))% from cache",
-                     size: 10.5, weight: .medium, color: Style.grey)
-    line.frame.origin = NSPoint(x: 14, y: 78 + dy - line.frame.height / 2)
-    c.addSubview(line)
-    return c
-  }
-
-  private func progressCard(height: CGFloat) -> Card {
-    let c = Card(width: Self.half, height: height)
-    c.header(icon: Style.symbol("dollarsign.circle", size: 11, color: Style.grey), title: "Spending")
-    let p = usage.progress ?? 0
-    let l = label("Reading history…", size: 11, weight: .medium, color: Style.grey)
-    l.frame.origin = NSPoint(x: 14, y: 40)
-    c.addSubview(l)
-    let bar = Shapes(frame: NSRect(x: 14, y: 67, width: c.bounds.width - 28, height: 4))
-    bar.rect(bar.bounds, color: Style.track, radius: 2)
-    bar.rect(NSRect(x: 0, y: 0, width: max(4, bar.bounds.width * p), height: 4), color: Style.accentBar, radius: 2)
-    c.addSubview(bar)
     return c
   }
 
