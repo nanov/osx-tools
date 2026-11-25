@@ -40,11 +40,22 @@ final class CursorUsage {
   private var generation = 0
   /// A silent keychain read was refused during this run; only `connect()` tries again.
   private(set) static var denied = false
-  /// Set once the user let this app read the key; cleared by Remove Hooks.
+  /// Set once the user let this build read the key; cleared by Remove Hooks. The Keychain's
+  /// "Always Allow" names this build by its code hash (the app has no Team ID), so a new build
+  /// needs Connect again, and silent reads skip it rather than risk a prompt.
   static var connected: Bool {
-    get { UserDefaults.standard.bool(forKey: "cursorUsage") }
-    set { UserDefaults.standard.set(newValue, forKey: "cursorUsage") }
+    get { UserDefaults.standard.data(forKey: "cursorUsageBuild").map { $0 == buildHash } ?? false }
+    set { UserDefaults.standard.set(newValue ? buildHash : nil, forKey: "cursorUsageBuild") }
   }
+
+  private static let buildHash: Data? = {
+    var code: SecCode?, staticCode: SecStaticCode?, info: CFDictionary?
+    guard SecCodeCopySelf([], &code) == errSecSuccess, let code,
+          SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess, let staticCode,
+          SecCodeCopySigningInformation(staticCode, [], &info) == errSecSuccess
+    else { return nil }
+    return (info as? [String: Any])?[kSecCodeInfoUnique as String] as? Data
+  }()
 
   static let databasePath = NSHomeDirectory() + "/Library/Application Support/Cursor/User/globalStorage/state.vscdb"
 
@@ -235,6 +246,8 @@ final class CursorUsage {
     guard stored.hasPrefix(prefix) else { return .token(stored) }
     guard let blob = Data(base64Encoded: String(stored.dropFirst(prefix.count))), blob.count > 3,
           blob.prefix(3) == Data("v10".utf8) else { return .failed }
+    // This build was never allowed: a read could show the prompt, so wait for Connect.
+    if !interactive, !connected { return .denied }
     var status: OSStatus = 0
     guard var password = keychainPassword(interactive: interactive, &status) else {
       return status == errSecAuthFailed || status == errSecUserCanceled || status == errSecInteractionNotAllowed

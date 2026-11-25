@@ -534,7 +534,7 @@ final class Agents {
 
   /// Bring the session's terminal pane to the front: its Rex session, the tab it's in, the pane.
   func jump(to s: Session) {
-    if s.source == .cursor { return Self.focusCursor(folder: (s.cwd as NSString).lastPathComponent) }
+    if s.source == .cursor { return Self.focusCursor(folder: s.cwd) }
     let rexApp = NSRunningApplication.runningApplications(withBundleIdentifier: "com.superlogical.rex").first
     rexApp?.activate()
     guard !s.rexSession.isEmpty else { return }
@@ -578,23 +578,17 @@ final class Agents {
     return image
   }()
 
-  /// Brings Cursor to the front, raising the window whose title names the folder if there is
-  /// one. (`cursor <folder>` would open a new window when the folder isn't open.)
+  /// Brings Cursor to the front on the session's folder.
   private static func focusCursor(folder: String) {
-    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: cursorBundleID).first else {
-      if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) {
-        NSWorkspace.shared.openApplication(at: url, configuration: .init())
-      }
-      return
+    guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) else { return }
+    // Opening the folder with Cursor focuses the window that has it open (or opens one).
+    if !folder.isEmpty, FileManager.default.fileExists(atPath: folder) {
+      NSWorkspace.shared.open([URL(fileURLWithPath: folder)], withApplicationAt: app, configuration: NSWorkspace.OpenConfiguration())
+    } else {
+      NSWorkspace.shared.openApplication(at: app, configuration: .init())
     }
-    if AX.trusted, !folder.isEmpty {
-      let ax = AXUIElementCreateApplication(app.processIdentifier)
-      if let w = AX.windows(ax).first(where: { (AX.value($0, kAXTitleAttribute) as? String)?.contains(folder) == true }) {
-        AXUIElementPerformAction(w, kAXRaiseAction as CFString)
-      }
-    }
-    app.activate()
   }
+
 
   // MARK: - Hooks
 
