@@ -177,7 +177,10 @@ final class Agents {
     let s = sessions[id] ?? Session(id: id)
     s.source = .cursor
     sessions[id] = s
-    if let root = (json["workspace_roots"] as? [String])?.first { s.cwd = root }
+    // Roots can be empty (a window with no folder) or file URLs; keep the last good folder.
+    let roots = (json["workspace_roots"] as? [String] ?? []) + [json["cwd"] as? String ?? ""]
+    if let root = roots.lazy.map({ $0.hasPrefix("file://") ? URL(string: $0)?.path ?? "" : $0 })
+      .first(where: { !$0.isEmpty && $0 != "/" }) { s.cwd = root }
     if let v = json["transcript_path"] as? String { s.transcript = v }
     s.lastEvent = Date()
     switch event {
@@ -373,13 +376,21 @@ final class Agents {
         while let nl = buffer.firstIndex(of: 0x0A) {
           let line = buffer[buffer.startIndex..<nl]
           buffer.removeSubrange(buffer.startIndex...nl)
-          guard line.range(of: Data("block_closed".utf8)) != nil,
+          guard line.range(of: Data("block_closed".utf8)) != nil || line.range(of: Data("session_label_changed".utf8)) != nil,
                 let root = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
                 let event = (root["payload"] as? [String: Any])?["event"] as? [String: Any],
-                event["type"] as? String == "block_closed",
-                let block = (event["payload"] as? [String: Any])?["block_id"] as? String
+                let payload = event["payload"] as? [String: Any]
           else { continue }
-          DispatchQueue.main.async { self?.blockClosed(session: id, block: block) }
+          switch event["type"] as? String {
+          case "block_closed":
+            if let block = payload["block_id"] as? String {
+              DispatchQueue.main.async { self?.blockClosed(session: id, block: block) }
+            }
+          case "session_label_changed":
+            let label = payload["label"] as? String ?? ""
+            DispatchQueue.main.async { self?.labelChanged(session: id, label: label) }
+          default: break
+          }
         }
       }
       p.terminationHandler = { [weak self] _ in
@@ -489,13 +500,20 @@ final class Agents {
       .max { ($0["connected_at"] as? String ?? "") < ($1["connected_at"] as? String ?? "") }?["client_id"] as? String
   }
 
+  /// A Rex session was renamed: every pane in it takes the new name.
+  private func labelChanged(session id: String, label: String) {
+    for s in sessions.values where s.rexSession == id { s.rexLabel = label.isEmpty ? nil : label }
+    onChange?()
+  }
+
   /// The Rex session's label ("fix-login-redirect") reads better than a folder name.
   private func resolveLabel(_ s: Session) {
     let id = s.rexSession
     Self.rex(["ls", "--json"]) { data in
       guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
             let list = root["sessions"] as? [[String: Any]],
-            let label = list.first(where: { $0["session_id"] as? String == id })?["label"] as? String
+            let label = list.first(where: { $0["session_id"] as? String == id })?["label"] as? String,
+            !label.isEmpty
       else { return }
       DispatchQueue.main.async { [weak self] in
         s.rexLabel = label
