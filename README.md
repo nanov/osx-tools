@@ -14,6 +14,17 @@ A small native macOS menu-bar app that replaced a Hammerspoon config and a handf
 - **Claude Code in the notch.** A small strip next to the notch (or a pill on screens without one) shows when a session is working, needs you, or has just finished. Hover it for a dashboard: plan limits, spend, trends, models, projects, and every open session. Click a session to jump to its pane in Rex.
 - **Clipboard history.** Press ⌃V for the last 50 things you copied: search, pin, paste, or paste as plain text. Anything a password manager marks as secret is skipped, and nothing leaves the Mac.
 
+<p align="center">
+  <img src="docs/screenshots/dashboard.png" width="300" alt="Claude Code dashboard under the notch: plan limits, spend, sessions, trend, models and projects">
+  <img src="docs/screenshots/panel.png" width="260" alt="Menu-bar panel with brightness, keep awake, Claude Code and clipboard cards">
+</p>
+<p align="center"><sub>The notch dashboard and the menu-bar panel.</sub></p>
+
+<p align="center">
+  <img src="docs/screenshots/clipboard.png" width="520" alt="Clipboard history popup opened with ⌃V">
+</p>
+<p align="center"><sub>Clipboard history, opened with ⌃V.</sub></p>
+
 ## Build
 
 ```sh

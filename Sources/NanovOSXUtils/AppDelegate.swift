@@ -147,7 +147,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
   private func updateIcon() {
     let awake = actions.keepAwake.isActive
     statusItem.button?.image = NSImage(systemSymbolName: awake ? "cup.and.heat.waves.fill" : "command",
-                                       accessibilityDescription: "Nanov OSX Utils")
+                                       accessibilityDescription: "Nanov OSX Tools")
   }
 
   private func reload() {
@@ -211,7 +211,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self?.reload()
     }
     return PanelController.row([
-      PanelController.label("Nanov OSX Utils", weight: .semibold), PanelController.spacer(), edit, reload,
+      PanelController.label("Nanov OSX Tools", weight: .semibold), PanelController.spacer(), edit, reload,
     ])
   }
 
