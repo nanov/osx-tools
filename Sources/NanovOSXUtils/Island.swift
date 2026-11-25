@@ -1,7 +1,7 @@
 import AppKit
 
-/// Claude Code status at the top of every screen: around the notch on the MacBook, a small
-/// pill at the top centre elsewhere. The strip shows while a session is working, needs you,
+/// Claude Code and Cursor agent status at the top of every screen: around the notch on the
+/// MacBook, a small pill at the top centre elsewhere. The strip shows while a session is working, needs you,
 /// or has just finished; click it to jump to the most urgent one. Hovering the notch or the
 /// pill's spot opens the dashboard, with or without sessions: when none is live, an invisible
 /// zone of the same size stays there. Animations are Core Animation, so they run in the
@@ -175,12 +175,27 @@ private final class IslandWindow: NSPanel {
     label.alignment = hasNotch ? .center : .left
     label.sizeToFit()
     let lh = label.frame.height
-    if hasNotch {
-      label.frame = NSRect(x: bounds.width - Self.ear - 4, y: (bandHeight - lh) / 2, width: Self.ear, height: lh)
-    } else {
-      label.frame = NSRect(x: mark.frame.maxX + 8, y: (bandHeight - lh) / 2,
-                           width: bounds.width - mark.frame.maxX - 16, height: lh)
+    // The most urgent session is Cursor's: its glyph goes before the count.
+    var app: TemplateMark?
+    if top.source == .cursor, let icon = Agents.cursorIcon {
+      app = TemplateMark(icon, size: 11, color: StatusMark.color(state))
     }
+    let appW: CGFloat = app == nil ? 0 : 15
+    if hasNotch {
+      let x = bounds.width - Self.ear - 4
+      if let app {
+        let start = x + ((Self.ear - appW - label.frame.width) / 2).rounded()
+        app.frame.origin = NSPoint(x: start, y: (bandHeight - 11) / 2)
+        label.frame = NSRect(x: start + appW, y: (bandHeight - lh) / 2, width: label.frame.width, height: lh)
+      } else {
+        label.frame = NSRect(x: x, y: (bandHeight - lh) / 2, width: Self.ear, height: lh)
+      }
+    } else {
+      app?.frame.origin = NSPoint(x: mark.frame.maxX + 8, y: (bandHeight - 11) / 2)
+      label.frame = NSRect(x: mark.frame.maxX + 8 + appW, y: (bandHeight - lh) / 2,
+                           width: bounds.width - mark.frame.maxX - 16 - appW, height: lh)
+    }
+    if let app { background.addSubview(app) }
     background.addSubview(label)
   }
 

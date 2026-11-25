@@ -31,8 +31,11 @@ if let i = CommandLine.arguments.firstIndex(of: "--render-dashboard"), i + 1 < C
   let period: Usage.Period = args.count > i + 2 ? (args[i + 2] == "week" ? .week : args[i + 2] == "month" ? .month : .today) : .today
   let agents = Agents()
   agents.scanProcesses()
+  // `--listen`: take over the hook socket for 3 s first, so test events can be sent in.
+  let listen = args.contains("--listen")
+  if listen { agents.start() }
   let d = Dashboard(agents: agents, usage: Usage())
-  DispatchQueue.main.async { d.render(to: args[i + 1], period: period) { exit(0) } }
+  DispatchQueue.main.asyncAfter(deadline: .now() + (listen ? 3 : 0)) { d.render(to: args[i + 1], period: period) { exit(0) } }
   app.run()
 }
 

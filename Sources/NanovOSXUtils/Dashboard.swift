@@ -472,10 +472,17 @@ final class Dashboard {
         self?.close()
       }
       let color = s.state == .attention ? Style.orange : s.state == .working ? Style.accent : Style.dim
-      let mark = ClaudeMark(size: 12, color: color)
-      mark.frame.origin = NSPoint(x: 8, y: (rowH - 13) / 2)
-      if s.state != .done { mark.pulse(fast: s.state == .attention) }
-      row.addSubview(mark)
+      if s.source == .cursor, let icon = Agents.cursorIcon {
+        let mark = TemplateMark(icon, size: 13, color: color)
+        mark.frame.origin = NSPoint(x: 7.5, y: (rowH - 13) / 2)
+        if s.state != .done { mark.pulse(fast: false) }
+        row.addSubview(mark)
+      } else {
+        let mark = ClaudeMark(size: 12, color: color)
+        mark.frame.origin = NSPoint(x: 8, y: (rowH - 13) / 2)
+        if s.state != .done { mark.pulse(fast: s.state == .attention) }
+        row.addSubview(mark)
+      }
 
       let time = label("", size: 11.5, weight: .semibold, color: color, digits: true)
       row.addSubview(time)

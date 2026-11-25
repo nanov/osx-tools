@@ -61,3 +61,36 @@ extension Timer {
     return t
   }
 }
+
+/// A template image (an app's menu-bar glyph) filled with one colour, drawn by Core Animation
+/// so a pulse costs the app nothing per frame.
+final class TemplateMark: NSView {
+  private let fill = CALayer()
+
+  init(_ image: NSImage, size: CGFloat, color: NSColor) {
+    super.init(frame: NSRect(x: 0, y: 0, width: size, height: size))
+    wantsLayer = true
+    fill.frame = bounds
+    fill.backgroundColor = color.cgColor
+    let mask = CALayer()
+    mask.frame = bounds
+    let scale = NSScreen.main?.backingScaleFactor ?? 2
+    mask.contentsScale = scale
+    mask.contents = image.layerContents(forContentsScale: scale)
+    mask.contentsGravity = .resizeAspect
+    fill.mask = mask
+    layer?.addSublayer(fill)
+  }
+
+  required init?(coder: NSCoder) { fatalError() }
+
+  func pulse(fast: Bool) {
+    let a = CABasicAnimation(keyPath: "opacity")
+    a.fromValue = 1
+    a.toValue = 0.35
+    a.duration = fast ? 0.5 : 0.9
+    a.autoreverses = true
+    a.repeatCount = .infinity
+    fill.add(a, forKey: "pulse")
+  }
+}

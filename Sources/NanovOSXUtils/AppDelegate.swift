@@ -69,6 +69,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let path = "/Applications/Claude.app/Contents/Resources/TrayIconTemplate.png"
     guard let image = NSImage(contentsOfFile: path) else { return PanelController.icon("sparkle", color: color) }
     image.isTemplate = true
+    return trayIcon(image, color: color)
+  }
+
+  /// Cursor's menu-bar icon, from the installed app (not shipped with this one).
+  static func cursorIcon(color: NSColor) -> NSImageView {
+    guard let image = Agents.cursorIcon?.copy() as? NSImage else { return PanelController.icon("cube", color: color) }
+    return trayIcon(image, color: color)
+  }
+
+  private static func trayIcon(_ image: NSImage, color: NSColor) -> NSImageView {
     image.size = NSSize(width: 16, height: 16)
     let v = NSImageView(image: image)
     v.contentTintColor = color
@@ -198,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     out.append(displaysCard(p))
     out.append(keepAwakeCard(p))
     out.append(claudeCard(p))
+    if Agents.cursorInstalled { out.append(cursorCard(p)) }
     out.append(clipboardCard(p))
     out.append(footer(p))
     return out
@@ -328,7 +339,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
   private func claudeCard(_ p: PanelController) -> NSView {
     let installed = Agents.hooksInstalled
-    let active = agents.sessions.values.filter { $0.state != .done }.count
+    let active = agents.sessions.values.filter { $0.source == .claude && $0.state != .done }.count
     let status = !installed ? "Off" : active == 0 ? "Idle" : "\(active) active"
     let button = p.on(NSButton(title: installed ? "Remove Hooks" : "Install Hooks", target: nil, action: nil)) {
       [weak self] _ in
@@ -357,6 +368,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       label(status, size: 11, color: .secondaryLabelColor),
       button,
     ])] + extra)
+  }
+
+  private func cursorCard(_ p: PanelController) -> NSView {
+    let installed = Agents.cursorHooksInstalled()
+    let active = agents.sessions.values.filter { $0.source == .cursor && $0.state != .done }.count
+    let status = !installed ? "Off" : active == 0 ? "Idle" : "\(active) active"
+    let button = p.on(NSButton(title: installed ? "Remove Hooks" : "Install Hooks", target: nil, action: nil)) {
+      [weak self] _ in
+      do {
+        try installed ? Agents.removeCursorHooks() : Agents.installCursorHooks()
+      } catch {
+        self?.problems.append("Cursor hooks: \(error.localizedDescription)")
+      }
+      self?.panel.refresh()
+    }
+    button.controlSize = .small
+    button.toolTip = installed
+      ? "Removes this app's hooks from ~/.cursor/hooks.json."
+      : "Adds hooks to ~/.cursor/hooks.json so Cursor's agent reports its status to the island. Cursor reloads them by itself."
+    return PanelController.card([PanelController.row([
+      Self.cursorIcon(color: active > 0 ? .labelColor : .secondaryLabelColor),
+      label("Cursor", weight: .medium),
+      PanelController.spacer(),
+      label(status, size: 11, color: .secondaryLabelColor),
+      button,
+    ])])
   }
 
   private func clipboardCard(_ p: PanelController) -> NSView {

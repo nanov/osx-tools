@@ -1,19 +1,22 @@
 import AppKit
 
-/// Live state of Claude Code sessions, pushed by Claude Code hooks over a Unix socket.
+/// Live state of Claude Code and Cursor agent sessions, pushed by their hooks over a Unix socket.
 ///
-/// Each hook runs a one-line shell command that sends the Rex session and pane it runs in,
-/// then the hook's JSON, to `~/.config/osx-utils/agents.sock`, in the background so Claude
-/// Code never waits on us. Nothing here polls, except a cheap staleness check while a
-/// session is working (an interrupted turn fires no hook).
+/// Each hook runs a one-line shell command that sends the Rex session and pane it runs in
+/// (and which app it is), then the hook's JSON, to `~/.config/osx-utils/agents.sock`, in the
+/// background so the agent never waits on us. Nothing here polls, except a cheap staleness
+/// check while a session is working (an interrupted turn fires no hook).
 final class Agents {
   enum State: Int, Comparable {
     case done, working, attention
     static func < (a: State, b: State) -> Bool { a.rawValue < b.rawValue }
   }
 
+  enum Source { case claude, cursor }
+
   final class Session {
     let id: String
+    var source = Source.claude
     var cwd = ""
     var transcript = ""
     var rexSession = ""
@@ -108,19 +111,20 @@ final class Agents {
     }
   }
 
-  /// "<rex session>\t<rex block>\n<hook json>" → (session, block, json).
-  private static func payload(_ data: Data) -> (String, String, [String: Any])? {
+  /// "<rex session>\t<rex block>[\t<source>]\n<hook json>" → (session, block, source, json).
+  private static func payload(_ data: Data) -> (String, String, String, [String: Any])? {
     guard let nl = data.firstIndex(of: 0x0A) else { return nil }
     let head = String(decoding: data[..<nl], as: UTF8.self).split(separator: "\t", omittingEmptySubsequences: false)
     guard let json = try? JSONSerialization.jsonObject(with: data[data.index(after: nl)...]) as? [String: Any]
     else { return nil }
-    return (head.first.map(String.init) ?? "", head.count > 1 ? String(head[1]) : "", json)
+    func field(_ i: Int) -> String { head.count > i ? String(head[i]) : "" }
+    return (field(0), field(1), field(2), json)
   }
 
   private func received(_ data: Data) {
-    guard let (rexSession, rexBlock, json) = Self.payload(data),
-          let id = json["session_id"] as? String, let event = json["hook_event_name"] as? String
-    else { return }
+    guard let (rexSession, rexBlock, source, json) = Self.payload(data) else { return }
+    if source == "cursor" { return receivedCursor(json) }
+    guard let id = json["session_id"] as? String, let event = json["hook_event_name"] as? String else { return }
     if event == "SessionEnd" {
       if let t = sessions[id]?.transcript, !t.isEmpty { onTranscript?(t) }
       sessions[id] = nil
@@ -160,6 +164,30 @@ final class Agents {
     changed()
   }
 
+  /// A Cursor hook event. Cursor has no event for "waiting on your approval", so its sessions
+  /// are only ever working or done.
+  private func receivedCursor(_ json: [String: Any]) {
+    guard let conversation = json["conversation_id"] as? String ?? json["session_id"] as? String,
+          let event = json["hook_event_name"] as? String else { return }
+    let id = "cursor:" + conversation
+    if event == "sessionEnd" {
+      sessions[id] = nil
+      return changed()
+    }
+    let s = sessions[id] ?? Session(id: id)
+    s.source = .cursor
+    sessions[id] = s
+    if let root = (json["workspace_roots"] as? [String])?.first { s.cwd = root }
+    if let v = json["transcript_path"] as? String { s.transcript = v }
+    s.lastEvent = Date()
+    switch event {
+    case "beforeSubmitPrompt", "postToolUse": set(s, .working)
+    case "stop": set(s, .done)
+    default: break // sessionStart: just registers the session
+    }
+    changed()
+  }
+
   private func set(_ s: Session, _ state: State) {
     guard s.state != state else { return }
     s.since = Date()
@@ -191,7 +219,7 @@ final class Agents {
     for proc in Self.claudeProcesses() {
       if sessions.values.contains(where: { $0.pid == proc.pid }) { continue }
       // A session that already reported from the same pane is this process.
-      if let s = sessions.values.first(where: { $0.pid == 0 && !$0.discovered && matches($0, proc) }) {
+      if let s = sessions.values.first(where: { $0.source == .claude && $0.pid == 0 && !$0.discovered && matches($0, proc) }) {
         s.pid = proc.pid
         watchExit(proc.pid)
         continue
@@ -218,7 +246,7 @@ final class Agents {
 
   /// A hooked session takes over the discovered entry for the same process.
   private func adoptDiscovered(into s: Session) {
-    guard let old = sessions.values.first(where: { $0.discovered && matches($0, ClaudeProcess(
+    guard s.source == .claude, let old = sessions.values.first(where: { $0.discovered && matches($0, ClaudeProcess(
       pid: 0, cwd: s.cwd, rexSession: s.rexSession, rexBlock: s.rexBlock, started: Date())) })
     else { return }
     s.pid = old.pid
@@ -408,8 +436,9 @@ final class Agents {
       let written = (try? FileManager.default.attributesOfItem(atPath: s.transcript)[.modificationDate] as? Date)
         ?? s.lastEvent
       let last = max(written, s.lastEvent)
-      // A long tool (build, test run) writes nothing for a while; allow more time.
-      if Date().timeIntervalSince(last) > (s.tool == nil ? 120 : 900) {
+      // A long tool (build, test run) writes nothing for a while; allow more time. Cursor
+      // reports an interrupted turn itself, and may keep no transcript to watch.
+      if Date().timeIntervalSince(last) > (s.tool == nil && s.source == .claude ? 120 : 900) {
         set(s, .done)
         s.tool = nil
         any = true
@@ -481,6 +510,7 @@ final class Agents {
 
   /// Bring the session's terminal pane to the front: its Rex session, the tab it's in, the pane.
   func jump(to s: Session) {
+    if s.source == .cursor { return Self.focusCursor(folder: (s.cwd as NSString).lastPathComponent) }
     let rexApp = NSRunningApplication.runningApplications(withBundleIdentifier: "com.superlogical.rex").first
     rexApp?.activate()
     guard !s.rexSession.isEmpty else { return }
@@ -508,6 +538,38 @@ final class Agents {
         Self.rex(["focus", "-s", session, block])
       }
     }
+  }
+
+  // MARK: - Cursor
+
+  static let cursorBundleID = "com.todesktop.230313mzl4w4u92"
+
+  /// Cursor's monochrome menu-bar icon from the installed app, as a template; nil without it.
+  static let cursorIcon: NSImage? = {
+    guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) else { return nil }
+    let dir = app.appendingPathComponent("Contents/Resources/app/resources/darwin")
+    guard let image = NSImage(contentsOf: dir.appendingPathComponent("trayTemplate@2x.png"))
+      ?? NSImage(contentsOf: dir.appendingPathComponent("trayTemplate.png")) else { return nil }
+    image.isTemplate = true
+    return image
+  }()
+
+  /// Brings Cursor to the front, raising the window whose title names the folder if there is
+  /// one. (`cursor <folder>` would open a new window when the folder isn't open.)
+  private static func focusCursor(folder: String) {
+    guard let app = NSRunningApplication.runningApplications(withBundleIdentifier: cursorBundleID).first else {
+      if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) {
+        NSWorkspace.shared.openApplication(at: url, configuration: .init())
+      }
+      return
+    }
+    if AX.trusted, !folder.isEmpty {
+      let ax = AXUIElementCreateApplication(app.processIdentifier)
+      if let w = AX.windows(ax).first(where: { (AX.value($0, kAXTitleAttribute) as? String)?.contains(folder) == true }) {
+        AXUIElementPerformAction(w, kAXRaiseAction as CFString)
+      }
+    }
+    app.activate()
   }
 
   // MARK: - Hooks
@@ -554,23 +616,76 @@ final class Agents {
   }
 
   private static func editSettings(_ edit: (inout [String: Any]) -> Void) throws {
+    try editJSON(settingsURL) { root in
+      var hooks = root["hooks"] as? [String: Any] ?? [:]
+      edit(&hooks)
+      root["hooks"] = hooks.isEmpty ? nil : hooks
+    }
+  }
+
+  /// Rewrites a JSON settings file in place, saving the original next to it the first time.
+  private static func editJSON(_ url: URL, _ edit: (inout [String: Any]) -> Void) throws {
     let fm = FileManager.default
     var root: [String: Any] = [:]
-    if let data = try? Data(contentsOf: settingsURL) {
+    if let data = try? Data(contentsOf: url) {
       guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         throw CocoaError(.fileReadCorruptFile)
       }
       root = obj
-      let backup = settingsURL.appendingPathExtension("before-nanov-osx-utils")
+      let backup = url.appendingPathExtension("before-nanov-osx-utils")
       if !fm.fileExists(atPath: backup.path) { try data.write(to: backup) }
     } else {
-      try fm.createDirectory(at: settingsURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+      try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
     }
-    var hooks = root["hooks"] as? [String: Any] ?? [:]
-    edit(&hooks)
-    root["hooks"] = hooks.isEmpty ? nil : hooks
+    edit(&root)
     let out = try JSONSerialization.data(withJSONObject: root,
                                          options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
-    try out.write(to: settingsURL, options: .atomic)
+    try out.write(to: url, options: .atomic)
+  }
+
+  // MARK: - Cursor hooks
+
+  static let cursorHooksURL = URL(fileURLWithPath: NSHomeDirectory() + "/.cursor/hooks.json")
+  static var cursorInstalled: Bool {
+    NSWorkspace.shared.urlForApplication(withBundleIdentifier: cursorBundleID) != nil
+  }
+  /// The events that tell working from done. Permission hooks (`preToolUse`,
+  /// `beforeShellExecution`, …) are left alone: they must answer allow or deny.
+  private static let cursorEvents = ["sessionStart", "sessionEnd", "beforeSubmitPrompt", "postToolUse", "stop"]
+  /// Like `command`, tagged as Cursor's; Cursor doesn't run inside Rex. Prints nothing, which
+  /// Cursor reads as "carry on".
+  static let cursorCommand = #"/bin/sh -c 'p=$(cat); s="$HOME/.config/osx-utils/agents.sock"; [ -S "$s" ] || exit 0; (printf "\t\tcursor\n%s" "$p" | /usr/bin/nc -U -w 2 "$s" >/dev/null 2>&1 &); exit 0'"#
+
+  static func cursorHooksInstalled(at url: URL = cursorHooksURL) -> Bool {
+    guard let data = try? Data(contentsOf: url) else { return false }
+    return String(decoding: data, as: UTF8.self).contains(marker)
+  }
+
+  /// Adds our hook to each event in ~/.cursor/hooks.json, keeping everything else. A copy of
+  /// the original is saved next to it first.
+  static func installCursorHooks(at url: URL = cursorHooksURL) throws {
+    try editJSON(url) { root in
+      var hooks = root["hooks"] as? [String: Any] ?? [:]
+      for e in cursorEvents {
+        var list = hooks[e] as? [[String: Any]] ?? []
+        list.removeAll { ($0["command"] as? String)?.contains(marker) == true }
+        list.append(["command": cursorCommand, "timeout": 5])
+        hooks[e] = list
+      }
+      root["hooks"] = hooks
+      if root["version"] == nil { root["version"] = 1 }
+    }
+  }
+
+  static func removeCursorHooks(at url: URL = cursorHooksURL) throws {
+    try editJSON(url) { root in
+      guard var hooks = root["hooks"] as? [String: Any] else { return }
+      for (e, v) in hooks {
+        guard var list = v as? [[String: Any]] else { continue }
+        list.removeAll { ($0["command"] as? String)?.contains(marker) == true }
+        hooks[e] = list.isEmpty ? nil : list
+      }
+      root["hooks"] = hooks
+    }
   }
 }
