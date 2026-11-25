@@ -19,6 +19,8 @@ import SQLite3
 final class CursorUsage {
   struct Reading: Codable {
     var plan: String?
+    /// The signed-in account, from Cursor's own state (`cursorAuth/cachedEmail`).
+    var email: String?
     /// Included usage used, 0…100+.
     var percent: Double?
     /// Spent this period in US cents: included usage plus on-demand.
@@ -144,7 +146,9 @@ final class CursorUsage {
     if let exp = claims["exp"] as? Double, exp < Date().timeIntervalSince1970 { return .signedOut }
     guard let json = get("https://cursor.com/api/usage-summary",
                          cookie: "WorkosCursorSessionToken=\(subject)%3A%3A\(token)") else { return .failed }
-    return parse(json).map { .reading($0) } ?? .failed
+    guard var r = parse(json) else { return .failed }
+    r.email = storedValue("cursorAuth/cachedEmail").flatMap { $0.isEmpty ? nil : $0 }
+    return .reading(r)
   }
 
   /// The usage-summary reply: `membershipType`, `billingCycleEnd`, and per pool (`plan`,

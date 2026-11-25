@@ -427,7 +427,7 @@ final class Dashboard {
       c.addSubview(badge)
       right = badge.frame.minX - 8
     }
-    c.header(icon: icon, title: "Cursor", titleWidth: right - 32)
+    c.header(icon: icon, title: reading?.email.map { "Cursor · " + $0 } ?? "Cursor", titleWidth: right - 32)
 
     let y: CGFloat = 41
     let name = label("Included usage", size: 11.5, weight: .semibold, color: Style.white)
