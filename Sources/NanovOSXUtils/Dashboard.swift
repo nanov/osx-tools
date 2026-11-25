@@ -13,7 +13,7 @@ final class Dashboard {
   private let usage: Usage
   private var window: DashboardWindow?
   private var root: RootView?
-  private var scroll: NSScrollView?
+  private var scroll: FadingScrollView?
   private var period = Usage.Period.today
   /// Kept between openings so the next one starts with numbers instead of a blank.
   private var summary: Usage.Summary?
@@ -170,9 +170,11 @@ final class Dashboard {
   /// row stays put; the cards scroll below it.
   private func build() {
     guard let root, let window else { return }
+    // Swapping the content mid-gesture strands the scroll (the rest of the swipe, its momentum
+    // and the bounce back); catch up once the scroll ends.
+    if let scroll, scroll.isLive { scroll.pendingBuild = true; return }
     tickers = []
-    let keptOffset = scroll?.contentView.bounds.origin.y ?? 0
-    root.content.subviews.forEach { $0.removeFromSuperview() }
+    root.content.subviews.forEach { if $0 !== scroll { $0.removeFromSuperview() } }
     let m = Self.margin
 
     let header = FlippedView(frame: NSRect(x: 0, y: 0, width: Self.width, height: topInset + 34))
@@ -239,15 +241,20 @@ final class Dashboard {
     doc.frame = NSRect(x: 0, y: 0, width: Self.width, height: y)
 
     height = min(header.frame.height + y, maxHeight)
-    let scroll = FadingScrollView(frame: NSRect(x: 0, y: header.frame.height, width: Self.width,
-                                                height: height - header.frame.height))
+    // One scroll view for the life of the window; only its content is replaced.
+    let scroll = self.scroll ?? FadingScrollView(frame: .zero)
+    if self.scroll == nil {
+      scroll.onLiveScrollEnd = { [weak self] in self?.build() }
+      self.scroll = scroll
+    }
+    let keptOffset = scroll.contentView.bounds.origin.y
+    scroll.frame = NSRect(x: 0, y: header.frame.height, width: Self.width, height: height - header.frame.height)
     scroll.documentView = doc
-    scroll.contentView.scroll(to: NSPoint(x: 0, y: min(keptOffset, max(0, y - scroll.frame.height))))
+    scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, min(keptOffset, y - scroll.frame.height))))
     scroll.reflectScrolledClipView(scroll.contentView)
     scroll.updateFade()
     root.content.addSubview(header)
-    root.content.addSubview(scroll)
-    self.scroll = scroll
+    if scroll.superview == nil { root.content.addSubview(scroll) }
 
     let size = NSSize(width: Silhouette.envelopeWidth(Self.width), height: height + Silhouette.overshoot)
     let frame = NSRect(x: screenFrame.midX - size.width / 2, y: screenFrame.maxY - size.height,
@@ -1023,10 +1030,18 @@ private final class FadingScrollView: NSScrollView {
     scrollerStyle = .overlay
     scrollerKnobStyle = .light
     verticalScrollElasticity = .allowed
+    // The window covers the menu bar, so its safe area would pad the content by the bar's
+    // height: a strip that never scrolls into view, and an offset scroll range.
+    automaticallyAdjustsContentInsets = false
+    contentInsets = NSEdgeInsetsZero
     wantsLayer = true
     contentView.postsBoundsChangedNotifications = true
     NotificationCenter.default.addObserver(self, selector: #selector(scrolled), name: NSView.boundsDidChangeNotification,
                                            object: contentView)
+    NotificationCenter.default.addObserver(self, selector: #selector(liveStart), name: NSScrollView.willStartLiveScrollNotification,
+                                           object: self)
+    NotificationCenter.default.addObserver(self, selector: #selector(liveEnd), name: NSScrollView.didEndLiveScrollNotification,
+                                           object: self)
     layer?.mask = fade
   }
 
@@ -1035,6 +1050,20 @@ private final class FadingScrollView: NSScrollView {
   deinit { NotificationCenter.default.removeObserver(self) }
 
   @objc private func scrolled() { updateFade() }
+
+  /// A swipe (with its momentum and bounce) is in progress.
+  private(set) var isLive = false
+  /// A rebuild was held back during the swipe.
+  var pendingBuild = false
+  var onLiveScrollEnd: (() -> Void)?
+
+  @objc private func liveStart() { isLive = true }
+  @objc private func liveEnd() {
+    isLive = false
+    guard pendingBuild else { return }
+    pendingBuild = false
+    onLiveScrollEnd?()
+  }
 
   func updateFade() {
     let h = max(bounds.height, 1)
