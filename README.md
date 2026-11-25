@@ -12,7 +12,7 @@ A small native macOS menu-bar app that replaced a Hammerspoon config and a handf
 - **Brightness for every screen.** The built-in display, external monitors over DDC, and a software dimmer for monitors that won't take DDC (looking at you, docks).
 - **Extra brightness.** On an XDR display the slider and keys keep going past 100%. There's no separate mode to think about.
 - **Claude Code in the notch.** A small strip next to the notch (or a pill on screens without one) shows when a session is working, needs you, or has just finished. Hover it for a dashboard: plan limits, spend, trends, models, projects, and every open session. Click a session to jump to its pane in Rex.
-- **Cursor too.** Install Cursor's hooks from the panel and its agent sessions show up in the same strip and list, marked with Cursor's logo, and the dashboard shows Cursor's plan usage for the billing period. Click a session to bring Cursor forward.
+- **Cursor too.** Install Cursor's hooks from the panel and its agent sessions show up in the same strip and list, marked with Cursor's logo. The dashboard adds Cursor's plan usage for the billing period. Click a session to bring Cursor forward.
 - **Clipboard history.** Press ⌃V for the last 50 things you copied: search, pin, paste, or paste as plain text. Anything a password manager marks as secret is skipped, and nothing leaves the Mac.
 
 <p align="center">
@@ -62,9 +62,9 @@ Shortcuts live in `~/.config/osx-utils/config.json`. The app writes the defaults
 
 Modifiers are `cmd`, `ctrl`, `alt` (or `opt`) and `shift`. Keys follow physical positions, so a shortcut stays put whatever your keyboard layout. If a shortcut is broken or another app already owns it, the menu-bar panel tells you.
 
-Everything else (brightness, extra brightness, keep awake, clipboard, Claude Code hooks) is switched on and off from the menu-bar panel. The Claude Code card there installs and removes the hooks; they live in `~/.claude/settings.json`, and the app backs that file up before it touches it.
+Everything else (brightness, extra brightness, keep awake, clipboard, Claude Code and Cursor hooks) is switched on and off from the menu-bar panel. The Claude Code card there installs and removes the hooks; they live in `~/.claude/settings.json`, and the app backs that file up before it touches it.
 
-The Cursor card does the same for `~/.cursor/hooks.json`. For the usage numbers, the app borrows the login Cursor already saved on your Mac: it unlocks it with Cursor's key from the Keychain (macOS asks the first time, when you install the hooks) and asks cursor.com for your current period's usage. The login stays in memory for that one request and only ever goes to cursor.com. Remove the hooks and the app stops asking.
+The Cursor card does the same for `~/.cursor/hooks.json`. For the usage numbers, the app borrows the login Cursor already saved on your Mac: it unlocks it with Cursor's key from the Keychain and asks cursor.com for your current period's usage. macOS asks before the app reads that key: when you install the hooks or press Connect Usage, and again after every new build, since the Keychain remembers each build separately. The login stays in memory for that one request and only ever goes to cursor.com. Remove the hooks and the app stops reading it.
 
 ## License
 
